@@ -184,12 +184,85 @@ const initDatabase = async () => {
       console.log('✅ 默认存储配置已创建 (请在管理后台修改为实际配置)');
     }
 
+    // 初始化默认系统配置
+    await initDefaultConfigs();
+    
     console.log('✅ 数据库初始化完成');
   } catch (error) {
     console.error('❌ 数据库初始化失败:', error);
     throw error;
   }
 };
+
+// 初始化默认系统配置
+async function initDefaultConfigs() {
+  try {
+    // 检查是否已有系统配置
+    const existingConfigs = await pool.query('SELECT COUNT(*) FROM system_configs');
+    const configCount = parseInt(existingConfigs.rows[0].count);
+    
+    if (configCount === 0) {
+      console.log('初始化默认系统配置...');
+      
+      // 默认系统配置
+      const defaultConfigs = [
+        {
+          key: 'system',
+          value: {
+            siteName: '图床管理系统',
+            siteDescription: '专业的图片存储和管理平台',
+            siteLogo: '',
+            siteIcon: '',
+            maxFileSize: 10,
+            maxBatchCount: 20,
+            allowedTypes: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+            autoCompress: false,
+            compressQuality: 80,
+            allowRegistration: true // 默认允许注册
+          },
+          description: '系统基础配置'
+        },
+        {
+          key: 'security',
+          value: {
+            allowRegistration: true, // 默认允许注册
+            requireEmailVerification: false,
+            jwtExpiration: 24,
+            maxLoginAttempts: 5
+          },
+          description: '安全配置'
+        },
+        {
+          key: 'email',
+          value: {
+            smtpHost: '',
+            smtpPort: 587,
+            smtpSecure: false,
+            fromEmail: '',
+            fromName: '图床系统',
+            smtpUser: '',
+            smtpPass: '',
+            testEmail: ''
+          },
+          description: '邮件服务配置'
+        }
+      ];
+      
+      // 插入默认配置
+      for (const config of defaultConfigs) {
+        await pool.query(
+          'INSERT INTO system_configs (config_key, config_value, description) VALUES ($1, $2, $3)',
+          [config.key, JSON.stringify(config.value), config.description]
+        );
+      }
+      
+      console.log('✅ 默认系统配置初始化完成');
+    }
+  } catch (error) {
+    console.error('❌ 初始化默认配置失败:', error);
+    // 不抛出错误，允许系统继续运行
+  }
+}
 
 // 图片数据库操作
 const imageDB = {

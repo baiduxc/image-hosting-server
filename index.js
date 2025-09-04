@@ -82,38 +82,7 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// 图片代理端点（解决对象存储CORS问题）
-app.get('/api/proxy-image', async (req, res) => {
-  try {
-    const { url } = req.query;
-    
-    if (!url) {
-      return res.status(400).json({ error: '缺少图片URL参数' });
-    }
-
-    const axios = require('axios');
-    const response = await axios.get(url, {
-      responseType: 'stream',
-      timeout: 10000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-
-    // 设置响应头
-    res.set({
-      'Content-Type': response.headers['content-type'] || 'image/jpeg',
-      'Cache-Control': 'public, max-age=86400', // 缓存1天
-      'Access-Control-Allow-Origin': '*'
-    });
-
-    // 转发图片流
-    response.data.pipe(res);
-  } catch (error) {
-    console.error('图片代理失败:', error.message);
-    res.status(404).json({ error: '图片加载失败' });
-  }
-});
+// 图片代理接口已移除 - 现在直接使用对象存储URL，无需代理
 
 // 上传到对象存储接口
 app.post('/api/upload-to-storage', authenticate, async (req, res) => {

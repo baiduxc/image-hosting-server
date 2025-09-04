@@ -44,7 +44,7 @@ router.get('/system', async (req, res) => {
       site_logo: systemConfig.siteLogo || '',
       site_description: systemConfig.siteDescription || '专业的图片存储和管理平台',
       site_keywords: '图床,图片存储,图片管理',
-      allow_register: securityConfig.allowRegister !== false // 默认允许注册
+      allow_register: systemConfig.allowRegistration !== false // 默认允许注册
     };
     
 
