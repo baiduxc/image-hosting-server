@@ -2,9 +2,24 @@ const { Pool } = require('pg');
 require('dotenv').config();
 
 // 创建数据库连接池
+const getSSLConfig = () => {
+  const sslMode = process.env.DB_SSL_MODE;
+  
+  if (sslMode === 'false' || sslMode === false) {
+    return false;
+  } else if (sslMode === 'require') {
+    return { rejectUnauthorized: true };
+  } else if (process.env.DATABASE_URL.includes('localhost')) {
+    return false;
+  } else {
+    // 默认对远程数据库使用SSL但不验证证书
+    return { rejectUnauthorized: false };
+  }
+};
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  ssl: getSSLConfig(),
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
@@ -31,23 +46,7 @@ const initDatabase = async () => {
       )
     `);
 
-    // 检查images表是否存在user_id列，如果不存在则添加
-    const columnCheck = await pool.query(`
-      SELECT column_name 
-      FROM information_schema.columns 
-      WHERE table_name = 'images' AND column_name = 'user_id'
-    `);
-
-    if (columnCheck.rows.length === 0) {
-      console.log('🔄 正在为images表添加user_id列...');
-      await pool.query(`
-        ALTER TABLE images 
-        ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL
-      `);
-      console.log('✅ user_id列添加成功');
-    }
-
-    // 创建图片表（如果不存在）
+    // 先创建图片表（如果不存在）
     await pool.query(`
       CREATE TABLE IF NOT EXISTS images (
         id SERIAL PRIMARY KEY,
@@ -69,6 +68,22 @@ const initDatabase = async () => {
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       )
     `);
+
+    // 检查images表是否存在user_id列，如果不存在则添加（用于旧数据库升级）
+    const columnCheck = await pool.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'images' AND column_name = 'user_id'
+    `);
+
+    if (columnCheck.rows.length === 0) {
+      console.log('🔄 正在为images表添加user_id列...');
+      await pool.query(`
+        ALTER TABLE images 
+        ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE SET NULL
+      `);
+      console.log('✅ user_id列添加成功');
+    }
 
     // 创建上传统计表
     await pool.query(`
