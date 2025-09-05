@@ -84,7 +84,7 @@ app.get('/api/health', (req, res) => {
 
 // 图片代理接口已移除 - 现在直接使用对象存储URL，无需代理
 
-// 上传到对象存储接口
+// 上传到对象存储接口 - 优化版本，支持异步批量上传
 app.post('/api/upload-to-storage', authenticate, async (req, res) => {
   try {
     const { files, storageId } = req.body;
@@ -117,19 +117,14 @@ app.post('/api/upload-to-storage', authenticate, async (req, res) => {
       });
     }
 
-
-
-    const uploadedFiles = [];
     const today = new Date().toISOString().split('T')[0];
     let totalSize = 0;
     let successCount = 0;
 
-    // 处理每个文件
-    for (let i = 0; i < files.length; i++) {
-      const fileData = files[i];
-      
+    // 异步处理单个文件的函数
+    const processFile = async (fileData, index) => {
       try {
-
+        console.log(`开始处理文件 ${index + 1}/${files.length}: ${fileData.name}`);
         
         // 上传到对象存储
         const uploadResult = await storageService.uploadFile(
@@ -155,43 +150,93 @@ app.post('/api/upload-to-storage', authenticate, async (req, res) => {
             storageId: storageId
           });
 
-          uploadedFiles.push({
+          console.log(`文件上传成功 ${index + 1}/${files.length}: ${fileData.name}`);
+          
+          return {
             id: imageRecord.id,
             originalName: fileData.name,
             filename: uploadResult.fileName,
             size: fileData.size,
             mimeType: fileData.type,
-            url: uploadResult.url
-          });
-
-          totalSize += fileData.size;
-          successCount++;
-          
+            url: uploadResult.url,
+            success: true,
+            index: index
+          };
 
         } else {
-          console.error(`文件上传失败: ${fileData.name} - ${uploadResult.error}`);
+          console.error(`文件上传失败 ${index + 1}/${files.length}: ${fileData.name} - ${uploadResult.error}`);
           
-          // 记录失败的文件
-          uploadedFiles.push({
+          return {
             originalName: fileData.name,
             size: fileData.size,
             mimeType: fileData.type,
             error: uploadResult.error,
-            success: false
-          });
+            success: false,
+            index: index
+          };
         }
       } catch (error) {
-        console.error(`处理文件时出错: ${fileData.name}`, error);
+        console.error(`处理文件时出错 ${index + 1}/${files.length}: ${fileData.name}`, error);
         
-        uploadedFiles.push({
+        return {
           originalName: fileData.name,
           size: fileData.size,
           mimeType: fileData.type,
           error: error.message,
-          success: false
-        });
+          success: false,
+          index: index
+        };
       }
+    };
+
+    // 使用Promise.allSettled并发处理所有文件，但限制并发数量
+    const concurrencyLimit = 3; // 限制同时处理3个文件，避免过载
+    const uploadedFiles = [];
+    
+    // 分批处理文件
+    for (let i = 0; i < files.length; i += concurrencyLimit) {
+      const batch = files.slice(i, i + concurrencyLimit);
+      const batchPromises = batch.map((fileData, batchIndex) => 
+        processFile(fileData, i + batchIndex)
+      );
+      
+      console.log(`处理批次 ${Math.floor(i / concurrencyLimit) + 1}: ${batch.length} 个文件`);
+      
+      // 等待当前批次完成
+      const batchResults = await Promise.allSettled(batchPromises);
+      
+      // 处理批次结果
+      batchResults.forEach((result, batchIndex) => {
+        if (result.status === 'fulfilled') {
+          const fileResult = result.value;
+          uploadedFiles.push(fileResult);
+          
+          if (fileResult.success) {
+            totalSize += fileResult.size;
+            successCount++;
+          }
+        } else {
+          // Promise被拒绝的情况
+          const fileData = batch[batchIndex];
+          uploadedFiles.push({
+            originalName: fileData.name,
+            size: fileData.size,
+            mimeType: fileData.type,
+            error: result.reason?.message || '未知错误',
+            success: false,
+            index: i + batchIndex
+          });
+        }
+      });
+      
+      console.log(`批次 ${Math.floor(i / concurrencyLimit) + 1} 完成，当前进度: ${uploadedFiles.length}/${files.length}`);
     }
+
+    // 按原始顺序排序结果
+    uploadedFiles.sort((a, b) => a.index - b.index);
+    
+    // 移除index字段
+    uploadedFiles.forEach(file => delete file.index);
 
     // 更新统计数据（只计算成功上传的文件）
     if (successCount > 0) {
@@ -200,6 +245,8 @@ app.post('/api/upload-to-storage', authenticate, async (req, res) => {
 
     // 返回结果
     const hasFailures = uploadedFiles.some(file => file.success === false);
+    
+    console.log(`批量上传完成: ${successCount}/${files.length} 个文件成功`);
     
     res.json({
       success: successCount > 0,
@@ -447,6 +494,133 @@ app.delete('/api/images/:id', async (req, res) => {
     res.status(500).json({
       success: false,
       message: '删除图片失败',
+      error: error.message
+    });
+  }
+});
+
+// 批量删除图片接口
+app.delete('/api/images/batch', async (req, res) => {
+  try {
+    const { ids } = req.body;
+    
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: '请提供要删除的图片ID列表'
+      });
+    }
+
+    // 验证和转换ID
+    const validIds = [];
+    for (const id of ids) {
+      const numId = Number(id);
+      if (isNaN(numId) || !Number.isInteger(numId) || numId <= 0) {
+        console.error(`无效的图片ID: ${id}`);
+        return res.status(400).json({
+          success: false,
+          message: `无效的图片ID: ${id}`
+        });
+      }
+      validIds.push(numId);
+    }
+
+    console.log(`开始批量删除 ${validIds.length} 张图片:`, validIds);
+    
+    const results = [];
+    const batchSize = 3; // 每批处理3个图片
+    
+    // 分批处理图片删除
+    for (let i = 0; i < validIds.length; i += batchSize) {
+      const batch = validIds.slice(i, i + batchSize);
+      console.log(`处理第 ${Math.floor(i/batchSize) + 1}/${Math.ceil(validIds.length/batchSize)} 批，包含 ${batch.length} 个图片`);
+      
+      const batchPromises = batch.map(async (id) => {
+        try {
+          console.log(`正在删除图片 ID: ${id}`);
+          
+          // 获取图片信息
+          const image = await imageDB.getById(id);
+          if (!image) {
+            console.log(`图片 ${id} 不存在`);
+            return {
+              id,
+              success: false,
+              message: '图片不存在'
+            };
+          }
+
+          console.log(`找到图片: ${image.filename}`);
+
+          // 删除物理文件
+          const filePath = path.join(__dirname, 'uploads', image.filename);
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+            console.log(`删除物理文件: ${filePath}`);
+          }
+
+          // 软删除数据库记录
+          await imageDB.delete(id);
+          console.log(`数据库删除成功: ${id}`);
+
+          return {
+            id,
+            success: true,
+            message: '删除成功'
+          };
+        } catch (error) {
+          console.error(`删除图片 ${id} 失败:`, error);
+          return {
+            id,
+            success: false,
+            message: error.message
+          };
+        }
+      });
+
+      const batchResults = await Promise.allSettled(batchPromises);
+      
+      // 处理批次结果
+      batchResults.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          results.push(result.value);
+        } else {
+          results.push({
+            id: batch[index],
+            success: false,
+            message: result.reason?.message || '删除失败'
+          });
+        }
+      });
+
+      // 批次间延迟，避免过于频繁的操作
+      if (i + batchSize < validIds.length) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+
+    // 统计结果
+    const successCount = results.filter(r => r.success).length;
+    const failCount = results.filter(r => !r.success).length;
+
+    console.log(`批量删除完成: 成功 ${successCount} 个，失败 ${failCount} 个`);
+
+    res.json({
+      success: true,
+      message: `批量删除完成: 成功 ${successCount} 个，失败 ${failCount} 个`,
+      data: {
+        total: ids.length,
+        success: successCount,
+        failed: failCount,
+        results: results
+      }
+    });
+
+  } catch (error) {
+    console.error('批量删除图片错误:', error);
+    res.status(500).json({
+      success: false,
+      message: '批量删除图片失败',
       error: error.message
     });
   }
