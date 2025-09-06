@@ -399,8 +399,13 @@ const imageDB = {
   },
 
   // 根据ID获取图片
-  async getById(id) {
-    const query = 'SELECT * FROM images WHERE id = $1 AND is_deleted = FALSE';
+  async getById(id, includeDeleted = false) {
+    let query;
+    if (includeDeleted) {
+      query = 'SELECT * FROM images WHERE id = $1';
+    } else {
+      query = 'SELECT * FROM images WHERE id = $1 AND is_deleted = FALSE';
+    }
     const result = await pool.query(query, [id]);
     return result.rows[0];
   },
@@ -458,6 +463,121 @@ const imageDB = {
       RETURNING *
     `;
     const result = await pool.query(query, [ids]);
+    return result.rows;
+  },
+
+  // 硬删除图片（物理删除）
+  async permanentDelete(id) {
+    const query = `
+      DELETE FROM images 
+      WHERE id = $1
+      RETURNING *
+    `;
+    const result = await pool.query(query, [id]);
+    return result.rows[0];
+  },
+
+  // 批量硬删除图片
+  async batchPermanentDelete(ids) {
+    const query = `
+      DELETE FROM images 
+      WHERE id = ANY($1)
+      RETURNING *
+    `;
+    const result = await pool.query(query, [ids]);
+    return result.rows;
+  },
+
+  // 获取已软删除的图片列表
+  async getDeletedImages(options = {}) {
+    const {
+      page = 1,
+      limit = 20,
+      search = '',
+      userId = null,
+      sortBy = 'updated_at',
+      sortOrder = 'DESC'
+    } = options;
+
+    const offset = (page - 1) * limit;
+    let whereClause = 'WHERE is_deleted = TRUE';
+    const queryParams = [];
+    let paramIndex = 1;
+
+    // 用户筛选
+    if (userId) {
+      whereClause += ` AND user_id = $${paramIndex}`;
+      queryParams.push(userId);
+      paramIndex++;
+    }
+
+    // 搜索条件
+    if (search) {
+      whereClause += ` AND (original_name ILIKE $${paramIndex} OR description ILIKE $${paramIndex})`;
+      queryParams.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    // 查询总数
+    const countQuery = `SELECT COUNT(*) FROM images ${whereClause}`;
+    const countResult = await pool.query(countQuery, queryParams);
+    const total = parseInt(countResult.rows[0].count);
+
+    // 查询数据
+    const dataQuery = `
+      SELECT * FROM images 
+      ${whereClause}
+      ORDER BY ${sortBy} ${sortOrder}
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+    `;
+    queryParams.push(limit, offset);
+
+    const dataResult = await pool.query(dataQuery, queryParams);
+
+    return {
+      images: dataResult.rows,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    };
+  },
+
+  // 恢复软删除的图片
+  async restore(id) {
+    const query = `
+      UPDATE images 
+      SET is_deleted = FALSE, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1 AND is_deleted = TRUE
+      RETURNING *
+    `;
+    const result = await pool.query(query, [id]);
+    return result.rows[0];
+  },
+
+  // 批量恢复软删除的图片
+  async batchRestore(ids) {
+    const query = `
+      UPDATE images 
+      SET is_deleted = FALSE, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ANY($1) AND is_deleted = TRUE
+      RETURNING *
+    `;
+    const result = await pool.query(query, [ids]);
+    return result.rows;
+  },
+
+  // 清理指定天数前的软删除记录
+  async cleanupDeletedImages(daysOld = 30) {
+    const query = `
+      DELETE FROM images 
+      WHERE is_deleted = TRUE 
+      AND updated_at < NOW() - INTERVAL '${daysOld} days'
+      RETURNING *
+    `;
+    const result = await pool.query(query);
     return result.rows;
   }
 };

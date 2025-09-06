@@ -9,7 +9,7 @@ const crypto = require('crypto');
 // 官方SDK
 const OSS = require('ali-oss');
 const COS = require('cos-nodejs-sdk-v5');
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const qiniu = require('qiniu');
 const upyun = require('upyun');
 
@@ -454,9 +454,6 @@ class StorageService {
     try {
       const { accessKeyId, secretAccessKey, bucket, region, endpoint } = config;
       
-      // 使用AWS SDK v3
-      const { DeleteObjectCommand } = require('@aws-sdk/client-s3');
-      
       const s3Config = {
         credentials: {
           accessKeyId: accessKeyId,
@@ -495,9 +492,6 @@ class StorageService {
   async deleteFromMinIO(config, fileName) {
     try {
       const { accessKey, secretKey, bucket, endpoint } = config;
-      
-      // 使用AWS SDK v3处理MinIO (S3兼容)
-      const { DeleteObjectCommand } = require('@aws-sdk/client-s3');
       
       const s3Config = {
         credentials: {
