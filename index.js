@@ -124,7 +124,6 @@ app.post('/api/upload-to-storage', authenticate, async (req, res) => {
     // 异步处理单个文件的函数
     const processFile = async (fileData, index) => {
       try {
-        console.log(`开始处理文件 ${index + 1}/${files.length}: ${fileData.name}`);
         
         // 上传到对象存储
         const uploadResult = await storageService.uploadFile(
@@ -145,12 +144,12 @@ app.post('/api/upload-to-storage', authenticate, async (req, res) => {
             fileUrl: uploadResult.url,
             fileSize: fileData.size,
             mimeType: fileData.type,
-            uploadType: 'cloud',
+            uploadType: 'storage',
             userId: req.user.id,
             storageId: storageId
           });
 
-          console.log(`文件上传成功 ${index + 1}/${files.length}: ${fileData.name}`);
+
           
           return {
             id: imageRecord.id,
@@ -164,7 +163,7 @@ app.post('/api/upload-to-storage', authenticate, async (req, res) => {
           };
 
         } else {
-          console.error(`文件上传失败 ${index + 1}/${files.length}: ${fileData.name} - ${uploadResult.error}`);
+ 
           
           return {
             originalName: fileData.name,
@@ -176,7 +175,7 @@ app.post('/api/upload-to-storage', authenticate, async (req, res) => {
           };
         }
       } catch (error) {
-        console.error(`处理文件时出错 ${index + 1}/${files.length}: ${fileData.name}`, error);
+
         
         return {
           originalName: fileData.name,
@@ -200,7 +199,7 @@ app.post('/api/upload-to-storage', authenticate, async (req, res) => {
         processFile(fileData, i + batchIndex)
       );
       
-      console.log(`处理批次 ${Math.floor(i / concurrencyLimit) + 1}: ${batch.length} 个文件`);
+
       
       // 等待当前批次完成
       const batchResults = await Promise.allSettled(batchPromises);
@@ -229,7 +228,6 @@ app.post('/api/upload-to-storage', authenticate, async (req, res) => {
         }
       });
       
-      console.log(`批次 ${Math.floor(i / concurrencyLimit) + 1} 完成，当前进度: ${uploadedFiles.length}/${files.length}`);
     }
 
     // 按原始顺序排序结果
@@ -246,7 +244,7 @@ app.post('/api/upload-to-storage', authenticate, async (req, res) => {
     // 返回结果
     const hasFailures = uploadedFiles.some(file => file.success === false);
     
-    console.log(`批量上传完成: ${successCount}/${files.length} 个文件成功`);
+
     
     res.json({
       success: successCount > 0,
@@ -263,7 +261,7 @@ app.post('/api/upload-to-storage', authenticate, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('上传到对象存储错误:', error);
+
     res.status(500).json({
       success: false,
       message: '上传失败',
@@ -325,7 +323,7 @@ app.post('/api/validate-urls', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('URL验证错误:', error);
+
     res.status(500).json({
       success: false,
       message: 'URL验证失败',
@@ -399,7 +397,6 @@ app.post('/api/transfer', authenticate, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('图片转存错误:', error);
     res.status(500).json({
       success: false,
       message: '图片转存失败',
@@ -452,7 +449,6 @@ app.get('/api/images', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('获取图片列表错误:', error);
     res.status(500).json({
       success: false,
       message: '获取图片列表失败',
@@ -490,7 +486,6 @@ app.delete('/api/images/:id', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('删除图片错误:', error);
     res.status(500).json({
       success: false,
       message: '删除图片失败',
@@ -516,7 +511,6 @@ app.delete('/api/images/batch', async (req, res) => {
     for (const id of ids) {
       const numId = Number(id);
       if (isNaN(numId) || !Number.isInteger(numId) || numId <= 0) {
-        console.error(`无效的图片ID: ${id}`);
         return res.status(400).json({
           success: false,
           message: `无效的图片ID: ${id}`
@@ -525,7 +519,7 @@ app.delete('/api/images/batch', async (req, res) => {
       validIds.push(numId);
     }
 
-    console.log(`开始批量删除 ${validIds.length} 张图片:`, validIds);
+
     
     const results = [];
     const batchSize = 3; // 每批处理3个图片
@@ -533,16 +527,15 @@ app.delete('/api/images/batch', async (req, res) => {
     // 分批处理图片删除
     for (let i = 0; i < validIds.length; i += batchSize) {
       const batch = validIds.slice(i, i + batchSize);
-      console.log(`处理第 ${Math.floor(i/batchSize) + 1}/${Math.ceil(validIds.length/batchSize)} 批，包含 ${batch.length} 个图片`);
       
       const batchPromises = batch.map(async (id) => {
         try {
-          console.log(`正在删除图片 ID: ${id}`);
+
           
           // 获取图片信息
           const image = await imageDB.getById(id);
           if (!image) {
-            console.log(`图片 ${id} 不存在`);
+
             return {
               id,
               success: false,
@@ -550,18 +543,18 @@ app.delete('/api/images/batch', async (req, res) => {
             };
           }
 
-          console.log(`找到图片: ${image.filename}`);
+
 
           // 删除物理文件
           const filePath = path.join(__dirname, 'uploads', image.filename);
           if (fs.existsSync(filePath)) {
             fs.unlinkSync(filePath);
-            console.log(`删除物理文件: ${filePath}`);
+
           }
 
           // 软删除数据库记录
           await imageDB.delete(id);
-          console.log(`数据库删除成功: ${id}`);
+
 
           return {
             id,
@@ -569,7 +562,6 @@ app.delete('/api/images/batch', async (req, res) => {
             message: '删除成功'
           };
         } catch (error) {
-          console.error(`删除图片 ${id} 失败:`, error);
           return {
             id,
             success: false,
@@ -603,7 +595,7 @@ app.delete('/api/images/batch', async (req, res) => {
     const successCount = results.filter(r => r.success).length;
     const failCount = results.filter(r => !r.success).length;
 
-    console.log(`批量删除完成: 成功 ${successCount} 个，失败 ${failCount} 个`);
+
 
     res.json({
       success: true,
@@ -617,7 +609,6 @@ app.delete('/api/images/batch', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('批量删除图片错误:', error);
     res.status(500).json({
       success: false,
       message: '批量删除图片失败',
@@ -664,7 +655,6 @@ app.get('/api/proxy-image', async (req, res) => {
     response.data.pipe(res);
 
   } catch (error) {
-    console.error('图片代理失败:', error.message);
     
     // 返回默认占位图或错误信息
     res.status(404).json({
@@ -685,7 +675,6 @@ app.get('/api/stats', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('获取统计数据错误:', error);
     res.status(500).json({
       success: false,
       message: '获取统计数据失败',
@@ -700,7 +689,6 @@ app.get('/api/stats', async (req, res) => {
 
 // 错误处理中间件
 app.use((error, req, res, next) => {
-  console.error('服务器错误:', error);
   res.status(500).json({
     success: false,
     message: '服务器内部错误',
@@ -740,7 +728,6 @@ const startServer = async () => {
     });
 
   } catch (error) {
-    console.error('❌ 服务器启动失败:', error);
     process.exit(1);
   }
 };

@@ -341,6 +341,250 @@ class StorageService {
   // ==================== 工具方法 ====================
 
   /**
+   * 删除文件从指定的存储服务
+   * @param {Object} storageConfig - 存储配置
+   * @param {string} fileName - 文件名/路径
+   * @returns {Promise<Object>} - 返回删除结果 {success, error}
+   */
+  async deleteFile(storageConfig, fileName) {
+    try {
+      const { type, config } = storageConfig;
+      
+      if (!this.supportedTypes.includes(type)) {
+        throw new Error(`不支持的存储类型: ${type}`);
+      }
+
+      switch (type) {
+        case 'cos':
+          return await this.deleteFromCOS(config, fileName);
+        case 'oss':
+          return await this.deleteFromOSS(config, fileName);
+        case 'qiniu':
+          return await this.deleteFromQiniu(config, fileName);
+        case 'upyun':
+          return await this.deleteFromUpyun(config, fileName);
+        case 's3':
+          return await this.deleteFromS3(config, fileName);
+        case 'minio':
+          return await this.deleteFromMinIO(config, fileName);
+        default:
+          throw new Error(`未实现的存储类型: ${type}`);
+      }
+    } catch (error) {
+      console.error('存储服务删除失败:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * 腾讯云COS删除
+   */
+  async deleteFromCOS(config, fileName) {
+    try {
+      const { secretId, secretKey, bucket } = config;
+      
+      // 提取region
+      const region = this.extractRegionFromEndpoint(config.endpoint, 'cos');
+      
+      // 使用官方SDK
+      const cos = new COS({
+        SecretId: secretId,
+        SecretKey: secretKey
+      });
+
+      // 删除文件
+      const result = await new Promise((resolve, reject) => {
+        cos.deleteObject({
+          Bucket: bucket,
+          Region: region,
+          Key: fileName
+        }, (err, data) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve(data);
+          }
+        });
+      });
+
+      return {
+        success: true,
+        message: 'COS文件删除成功'
+      };
+    } catch (error) {
+      throw new Error(`COS删除错误: ${error.message}`);
+    }
+  }
+
+  /**
+   * 阿里云OSS删除
+   */
+  async deleteFromOSS(config, fileName) {
+    try {
+      const { accessKeyId, accessKeySecret, bucket, endpoint } = config;
+      
+      // 使用官方SDK
+      const client = new OSS({
+        region: this.extractRegionFromEndpoint(endpoint, 'oss'),
+        accessKeyId: accessKeyId,
+        accessKeySecret: accessKeySecret,
+        bucket: bucket,
+        endpoint: endpoint
+      });
+
+      // 删除文件
+      const result = await client.delete(fileName);
+
+      return {
+        success: true,
+        message: 'OSS文件删除成功'
+      };
+    } catch (error) {
+      throw new Error(`OSS删除错误: ${error.message}`);
+    }
+  }
+
+  /**
+   * Amazon S3删除
+   */
+  async deleteFromS3(config, fileName) {
+    try {
+      const { accessKeyId, secretAccessKey, bucket, region, endpoint } = config;
+      
+      // 使用AWS SDK v3
+      const { DeleteObjectCommand } = require('@aws-sdk/client-s3');
+      
+      const s3Config = {
+        credentials: {
+          accessKeyId: accessKeyId,
+          secretAccessKey: secretAccessKey
+        },
+        region: region
+      };
+      
+      if (endpoint) {
+        s3Config.endpoint = endpoint;
+        s3Config.forcePathStyle = true;
+      }
+      
+      const s3Client = new S3Client(s3Config);
+
+      // 删除文件
+      const command = new DeleteObjectCommand({
+        Bucket: bucket,
+        Key: fileName
+      });
+
+      const result = await s3Client.send(command);
+      
+      return {
+        success: true,
+        message: 'S3文件删除成功'
+      };
+    } catch (error) {
+      throw new Error(`S3删除错误: ${error.message}`);
+    }
+  }
+
+  /**
+   * MinIO删除 (S3兼容)
+   */
+  async deleteFromMinIO(config, fileName) {
+    try {
+      const { accessKey, secretKey, bucket, endpoint } = config;
+      
+      // 使用AWS SDK v3处理MinIO (S3兼容)
+      const { DeleteObjectCommand } = require('@aws-sdk/client-s3');
+      
+      const s3Config = {
+        credentials: {
+          accessKeyId: accessKey,
+          secretAccessKey: secretKey
+        },
+        endpoint: endpoint,
+        region: 'us-east-1', // MinIO默认region
+        forcePathStyle: true, // MinIO需要路径样式
+      };
+      
+      const s3Client = new S3Client(s3Config);
+
+      // 删除文件
+      const command = new DeleteObjectCommand({
+        Bucket: bucket,
+        Key: fileName
+      });
+
+      const result = await s3Client.send(command);
+      
+      return {
+        success: true,
+        message: 'MinIO文件删除成功'
+      };
+    } catch (error) {
+      throw new Error(`MinIO删除错误: ${error.message}`);
+    }
+  }
+
+  /**
+   * 七牛云删除
+   */
+  async deleteFromQiniu(config, fileName) {
+    try {
+      const { accessKey, secretKey, bucket } = config;
+      
+      // 使用官方SDK
+      const mac = new qiniu.auth.digest.Mac(accessKey, secretKey);
+      const bucketManager = new qiniu.rs.BucketManager(mac, new qiniu.conf.Config());
+
+      // 删除文件
+      const result = await new Promise((resolve, reject) => {
+        bucketManager.delete(bucket, fileName, (err, respBody, respInfo) => {
+          if (err) {
+            reject(err);
+          } else if (respInfo.statusCode === 200) {
+            resolve(respBody);
+          } else {
+            reject(new Error(`七牛云删除失败: ${respInfo.statusCode}`));
+          }
+        });
+      });
+
+      return {
+        success: true,
+        message: '七牛云文件删除成功'
+      };
+    } catch (error) {
+      throw new Error(`七牛云删除错误: ${error.message}`);
+    }
+  }
+
+  /**
+   * 又拍云删除
+   */
+  async deleteFromUpyun(config, fileName) {
+    try {
+      const { operator, password, bucket } = config;
+      
+      // 使用官方SDK
+      const service = new upyun.Service(bucket, operator, password);
+      const client = new upyun.Client(service);
+
+      // 删除文件
+      await client.deleteFile(`/${fileName}`);
+
+      return {
+        success: true,
+        message: '又拍云文件删除成功'
+      };
+    } catch (error) {
+      throw new Error(`又拍云删除错误: ${error.message}`);
+    }
+  }
+
+  /**
    * 从endpoint提取region
    */
   extractRegionFromEndpoint(endpoint, type) {

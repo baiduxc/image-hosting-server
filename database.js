@@ -85,6 +85,22 @@ const initDatabase = async () => {
       console.log('✅ user_id列添加成功');
     }
 
+    // 检查images表是否存在storage_id列，如果不存在则添加
+    const storageColumnCheck = await pool.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'images' AND column_name = 'storage_id'
+    `);
+
+    if (storageColumnCheck.rows.length === 0) {
+      console.log('🔄 正在为images表添加storage_id列...');
+      await pool.query(`
+        ALTER TABLE images 
+        ADD COLUMN storage_id INTEGER REFERENCES storage_configs(id) ON DELETE SET NULL
+      `);
+      console.log('✅ storage_id列添加成功');
+    }
+
     // 创建上传统计表
     await pool.query(`
       CREATE TABLE IF NOT EXISTS upload_stats (
@@ -296,20 +312,21 @@ const imageDB = {
       originalUrl = null,
       tags = [],
       description = null,
-      userId = null
+      userId = null,
+      storageId = null
     } = imageData;
 
     const query = `
       INSERT INTO images (
         user_id, filename, original_name, file_path, file_url, file_size, 
-        mime_type, width, height, upload_type, original_url, tags, description
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        mime_type, width, height, upload_type, original_url, tags, description, storage_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING *
     `;
 
     const values = [
       userId, filename, originalName, filePath, fileUrl, fileSize,
-      mimeType, width, height, uploadType, originalUrl, tags, description
+      mimeType, width, height, uploadType, originalUrl, tags, description, storageId
     ];
 
     const result = await pool.query(query, values);

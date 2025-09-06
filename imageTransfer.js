@@ -314,7 +314,8 @@ const transferSingleImage = async (originalUrl, uploadDir, baseUrl, userId = nul
       height: metadata.height,
       uploadType: 'transfer',
       originalUrl: originalUrl,
-      userId: userId
+      userId: userId,
+      storageId: defaultStorage.id
     });
 
     

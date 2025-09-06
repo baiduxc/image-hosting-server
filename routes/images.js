@@ -1,6 +1,7 @@
 const express = require('express');
-const { imageDB } = require('../database');
+const { imageDB, storageDB } = require('../database');
 const { authenticate, optionalAuth, requireOwnerOrAdmin } = require('../middleware/auth');
+const StorageService = require('../services/storageService');
 
 const router = express.Router();
 
@@ -195,12 +196,37 @@ router.delete('/:id', authenticate, async (req, res) => {
       });
     }
 
-    // 删除物理文件
-    const fs = require('fs');
-    const path = require('path');
-    const filePath = path.join(__dirname, '..', 'uploads', image.filename);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    // 删除对象存储中的文件
+    let storageDeleteResult = null;
+    if (image.storage_id && image.upload_type === 'storage') {
+      try {
+        // 获取存储配置
+        const storageConfig = await storageDB.getStorage(image.storage_id);
+        if (storageConfig) {
+          const storageService = new StorageService();
+          // 从文件URL中提取文件路径
+          const fileName = extractFileNameFromUrl(image.file_url, storageConfig);
+          if (fileName) {
+            storageDeleteResult = await storageService.deleteFile(storageConfig, fileName);
+            if (!storageDeleteResult.success) {
+              console.warn(`对象存储删除失败: ${storageDeleteResult.error}`);
+            }
+          }
+        }
+      } catch (storageError) {
+        console.warn('对象存储删除失败:', storageError);
+        // 不阻止数据库删除，只记录警告
+      }
+    }
+
+    // 删除本地物理文件（如果存在）
+    if (image.upload_type === 'local') {
+      const fs = require('fs');
+      const path = require('path');
+      const filePath = path.join(__dirname, '..', 'uploads', image.filename);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
     }
 
     // 软删除数据库记录
@@ -208,7 +234,8 @@ router.delete('/:id', authenticate, async (req, res) => {
 
     res.json({
       success: true,
-      message: '图片删除成功'
+      message: '图片删除成功',
+      storageDeleted: storageDeleteResult?.success || false
     });
 
   } catch (error) {
@@ -220,6 +247,32 @@ router.delete('/:id', authenticate, async (req, res) => {
     });
   }
 });
+
+// 从文件URL中提取文件名/路径的辅助函数
+function extractFileNameFromUrl(fileUrl, storageConfig) {
+  try {
+    const url = new URL(fileUrl);
+    let pathname = url.pathname;
+    
+    // 移除开头的斜杠
+    if (pathname.startsWith('/')) {
+      pathname = pathname.substring(1);
+    }
+    
+    // 对于某些存储服务，可能需要移除bucket名称
+    if (storageConfig.type === 'minio' && pathname.includes('/')) {
+      const parts = pathname.split('/');
+      if (parts[0] === storageConfig.config.bucket) {
+        pathname = parts.slice(1).join('/');
+      }
+    }
+    
+    return pathname;
+  } catch (error) {
+    console.error('提取文件名失败:', error);
+    return null;
+  }
+}
 
 // 批量删除图片
 router.delete('/', authenticate, async (req, res) => {
@@ -235,6 +288,7 @@ router.delete('/', authenticate, async (req, res) => {
 
     const deletedImages = [];
     const errors = [];
+    const storageService = new StorageService();
 
     for (const id of ids) {
       try {
@@ -251,12 +305,35 @@ router.delete('/', authenticate, async (req, res) => {
           continue;
         }
 
-        // 删除物理文件
-        const fs = require('fs');
-        const path = require('path');
-        const filePath = path.join(__dirname, '..', 'uploads', image.filename);
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
+        // 删除对象存储中的文件
+        if (image.storage_id && image.upload_type === 'storage') {
+          try {
+            // 获取存储配置
+            const storageConfig = await storageDB.getStorage(image.storage_id);
+            if (storageConfig) {
+              // 从文件URL中提取文件路径
+              const fileName = extractFileNameFromUrl(image.file_url, storageConfig);
+              if (fileName) {
+                const storageDeleteResult = await storageService.deleteFile(storageConfig, fileName);
+                if (!storageDeleteResult.success) {
+                  console.warn(`图片 ${id} 对象存储删除失败: ${storageDeleteResult.error}`);
+                }
+              }
+            }
+          } catch (storageError) {
+            console.warn(`图片 ${id} 对象存储删除失败:`, storageError);
+            // 不阻止数据库删除，只记录警告
+          }
+        }
+
+        // 删除本地物理文件（如果存在）
+        if (image.upload_type === 'local') {
+          const fs = require('fs');
+          const path = require('path');
+          const filePath = path.join(__dirname, '..', 'uploads', image.filename);
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
         }
 
         // 软删除数据库记录
