@@ -253,11 +253,12 @@ const transferSingleImage = async (originalUrl, uploadDir, baseUrl, userId = nul
     // 强制使用对象存储进行转存
     let finalUrl = '';
     let finalPath = '';
+    let defaultStorage = null;
     
     try {
       // 从数据库获取默认存储配置
       const { storageDB } = require('./database');
-      const defaultStorage = await storageDB.getDefaultStorage();
+      defaultStorage = await storageDB.getDefaultStorage();
       
       if (!defaultStorage) {
         throw new Error('未找到默认存储配置，请先配置对象存储');
@@ -315,7 +316,7 @@ const transferSingleImage = async (originalUrl, uploadDir, baseUrl, userId = nul
       uploadType: 'transfer',
       originalUrl: originalUrl,
       userId: userId,
-      storageId: defaultStorage.id
+      storageId: defaultStorage ? defaultStorage.id : null
     });
 
     
