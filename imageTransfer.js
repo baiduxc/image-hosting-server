@@ -284,7 +284,7 @@ const transferSingleImage = async (originalUrl, uploadDir, baseUrl, userId = nul
       };
       
       // 上传到对象存储
-      const uploadResult = await storageService.uploadFile(storageConfig, fileData, 'transfer/');
+      const uploadResult = await storageService.uploadFile(storageConfig, fileData, 'transfer');
       
       if (uploadResult.success) {
         finalUrl = uploadResult.url;
