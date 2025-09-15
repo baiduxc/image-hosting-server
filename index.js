@@ -344,15 +344,35 @@ app.post('/api/transfer', authenticate, async (req, res) => {
       });
     }
 
-    // 过滤和验证URL
+    // 过滤和验证URL - 改进版本，支持复杂查询参数
     const validUrls = urls.filter(url => {
+      // 清理URL - 移除前后的引号和空格
+      const trimmedUrl = url.toString().trim().replace(/^["']|["']$/g, '');
+      
+      if (trimmedUrl.length === 0) return false;
+      
+      // 基本格式检查 - 更宽松的验证
+      if (!trimmedUrl.match(/^https?:\/\/.+/i)) return false;
+      
+      // 检查是否包含域名
+      if (!trimmedUrl.match(/^https?:\/\/[^\s\/]+\.[^\s\/]+/i)) return false;
+      
       try {
-        new URL(url.trim());
-        return url.trim().length > 0;
+        // 尝试直接解析URL
+        new URL(trimmedUrl);
+        return true;
       } catch {
-        return false;
+        try {
+          // 尝试解码后再验证
+          const decodedUrl = decodeURIComponent(trimmedUrl);
+          new URL(decodedUrl);
+          return true;
+        } catch {
+          // 最宽松的检查 - 只要是基本的URL格式就通过
+          return true;
+        }
       }
-    }).map(url => url.trim());
+    }).map(url => url.toString().trim().replace(/^["']|["']$/g, ''));
 
     if (validUrls.length === 0) {
       return res.status(400).json({

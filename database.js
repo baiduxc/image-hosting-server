@@ -85,22 +85,6 @@ const initDatabase = async () => {
       console.log('✅ user_id列添加成功');
     }
 
-    // 检查images表是否存在storage_id列，如果不存在则添加
-    const storageColumnCheck = await pool.query(`
-      SELECT column_name 
-      FROM information_schema.columns 
-      WHERE table_name = 'images' AND column_name = 'storage_id'
-    `);
-
-    if (storageColumnCheck.rows.length === 0) {
-      console.log('🔄 正在为images表添加storage_id列...');
-      await pool.query(`
-        ALTER TABLE images 
-        ADD COLUMN storage_id INTEGER REFERENCES storage_configs(id) ON DELETE SET NULL
-      `);
-      console.log('✅ storage_id列添加成功');
-    }
-
     // 创建上传统计表
     await pool.query(`
       CREATE TABLE IF NOT EXISTS upload_stats (
@@ -139,6 +123,22 @@ const initDatabase = async () => {
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       )
     `);
+
+    // 检查images表是否存在storage_id列，如果不存在则添加（必须在storage_configs表创建之后）
+    const storageColumnCheck = await pool.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'images' AND column_name = 'storage_id'
+    `);
+
+    if (storageColumnCheck.rows.length === 0) {
+      console.log('🔄 正在为images表添加storage_id列...');
+      await pool.query(`
+        ALTER TABLE images 
+        ADD COLUMN storage_id INTEGER REFERENCES storage_configs(id) ON DELETE SET NULL
+      `);
+      console.log('✅ storage_id列添加成功');
+    }
 
     // 创建索引
     await pool.query(`

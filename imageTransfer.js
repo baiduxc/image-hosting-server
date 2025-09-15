@@ -2,7 +2,7 @@ const axios = require('axios');
 const sharp = require('sharp');
 const path = require('path');
 const fs = require('fs');
-const { imageDB, statsDB } = require('./database');
+const { imageDB, statsDB, storageDB } = require('./database');
 const { configManager } = require('./config');
 const StorageService = require('./services/storageService');
 
@@ -83,25 +83,41 @@ const createRequestConfig = (url, options = {}) => {
     }
   };
 
-  // 根据域名设置特定的Referer
+  // 根据域名设置特定的Referer和其他头部
   if (domain) {
-    // 常见网站的Referer策略
-    const refererStrategies = {
-      'weibo.com': `https://${domain}/`,
-      'sina.com.cn': `https://${domain}/`,
-      'qq.com': `https://${domain}/`,
-      'baidu.com': `https://${domain}/`,
-      'zhihu.com': `https://${domain}/`,
-      'bilibili.com': `https://${domain}/`,
-      'douban.com': `https://${domain}/`,
-      'taobao.com': `https://${domain}/`,
-      'tmall.com': `https://${domain}/`,
-      'jd.com': `https://${domain}/`
-    };
+    // 抖音域名特殊处理
+    if (domain.includes('douyinpic.com') || domain.includes('douyincdn.com') || domain.includes('bytedance.com')) {
+      config.headers['Referer'] = 'https://www.douyin.com/';
+      config.headers['Origin'] = 'https://www.douyin.com';
+      config.headers['Accept'] = 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8';
+      config.headers['Sec-Fetch-Dest'] = 'image';
+      config.headers['Sec-Fetch-Mode'] = 'no-cors';
+      config.headers['Sec-Fetch-Site'] = 'cross-site';
+      // 移除可能导致问题的头部
+      delete config.headers['Cache-Control'];
+      delete config.headers['Pragma'];
+    } else {
+      // 常见网站的Referer策略
+      const refererStrategies = {
+        'weibo.com': `https://${domain}/`,
+        'sina.com.cn': `https://${domain}/`,
+        'qq.com': `https://${domain}/`,
+        'baidu.com': `https://${domain}/`,
+        'zhihu.com': `https://${domain}/`,
+        'bilibili.com': `https://${domain}/`,
+        'douban.com': `https://${domain}/`,
+        'taobao.com': `https://${domain}/`,
+        'tmall.com': `https://${domain}/`,
+        'jd.com': `https://${domain}/`,
+        // 其他短视频平台
+        'kuaishou.com': 'https://www.kuaishou.com/',
+        'xiaohongshu.com': 'https://www.xiaohongshu.com/'
+      };
 
-    // 设置Referer
-    const referer = refererStrategies[domain] || `https://${domain}/`;
-    config.headers['Referer'] = referer;
+      // 设置Referer
+      const referer = refererStrategies[domain] || `https://${domain}/`;
+      config.headers['Referer'] = referer;
+    }
   }
 
   return config;
@@ -230,11 +246,27 @@ const transferSingleImage = async (originalUrl, uploadDir, baseUrl, userId = nul
   
   try {
     
-    // 验证URL格式
+    // 验证URL格式 - 改进版本，支持复杂查询参数
     try {
+      // 先尝试直接解析URL
       new URL(originalUrl);
     } catch (error) {
-      throw new Error('无效的URL格式');
+      // 如果直接解析失败，尝试对URL进行编码处理
+      try {
+        // 检查是否是有效的HTTP/HTTPS URL
+        if (!originalUrl.match(/^https?:\/\/.+/i)) {
+          throw new Error('URL必须以http://或https://开头');
+        }
+        
+        // 尝试解码后再编码，处理可能的编码问题
+        const decodedUrl = decodeURIComponent(originalUrl);
+        new URL(decodedUrl);
+      } catch (secondError) {
+        // 最后的检查：至少确保URL格式基本正确
+        if (!originalUrl.match(/^https?:\/\/[^\s]+\.[^\s]+/i)) {
+          throw new Error('无效的URL格式');
+        }
+      }
     }
 
     // 下载图片
@@ -257,7 +289,6 @@ const transferSingleImage = async (originalUrl, uploadDir, baseUrl, userId = nul
     
     try {
       // 从数据库获取默认存储配置
-      const { storageDB } = require('./database');
       defaultStorage = await storageDB.getDefaultStorage();
       
       if (!defaultStorage) {

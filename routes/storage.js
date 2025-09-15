@@ -23,6 +23,66 @@ router.get('/', authenticate, requireAdmin, async (req, res) => {
   }
 });
 
+// 获取可用存储配置列表（所有认证用户）
+router.get('/available', authenticate, async (req, res) => {
+  try {
+    const storages = await storageDB.getAllStorages();
+    
+    // 只返回必要的信息，隐藏敏感配置
+    const availableStorages = storages.map(storage => ({
+      id: storage.id,
+      name: storage.name,
+      type: storage.type,
+      isDefault: storage.is_default,
+      isActive: storage.is_active
+    }));
+    
+    res.json({
+      success: true,
+      data: availableStorages
+    });
+  } catch (error) {
+    console.error('获取可用存储配置失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '获取可用存储配置失败',
+      error: error.message
+    });
+  }
+});
+
+// 获取默认存储配置（所有用户）
+router.get('/default/info', authenticate, async (req, res) => {
+  try {
+    const storage = await storageDB.getDefaultStorage();
+    
+    if (!storage) {
+      return res.status(404).json({
+        success: false,
+        message: '未配置默认存储'
+      });
+    }
+    
+    // 只返回必要的信息，不暴露敏感配置
+    res.json({
+      success: true,
+      data: {
+        id: storage.id,
+        name: storage.name,
+        type: storage.type,
+        isDefault: true
+      }
+    });
+  } catch (error) {
+    console.error('获取默认存储失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '获取默认存储失败',
+      error: error.message
+    });
+  }
+});
+
 // 获取特定存储配置（管理员）
 router.get('/:id', authenticate, requireAdmin, async (req, res) => {
   try {
@@ -167,37 +227,6 @@ router.delete('/:id', authenticate, requireAdmin, async (req, res) => {
     res.status(500).json({
       success: false,
       message: '删除存储配置失败',
-      error: error.message
-    });
-  }
-});
-
-// 获取默认存储配置（所有用户）
-router.get('/default/info', authenticate, async (req, res) => {
-  try {
-    const storage = await storageDB.getDefaultStorage();
-    
-    if (!storage) {
-      return res.status(404).json({
-        success: false,
-        message: '未配置默认存储'
-      });
-    }
-    
-    // 只返回必要的信息，不暴露敏感配置
-    res.json({
-      success: true,
-      data: {
-        id: storage.id,
-        name: storage.name,
-        type: storage.type
-      }
-    });
-  } catch (error) {
-    console.error('获取默认存储失败:', error);
-    res.status(500).json({
-      success: false,
-      message: '获取默认存储失败',
       error: error.message
     });
   }
