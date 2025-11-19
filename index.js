@@ -20,6 +20,7 @@ const imageRoutes = require('./routes/images');
 const userRoutes = require('./routes/users');
 const configRoutes = require('./routes/config');
 const storageRoutes = require('./routes/storage');
+const databaseRoutes = require('./routes/database');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -58,6 +59,7 @@ app.use('/api/images', imageRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/storage', storageRoutes);
+app.use('/api/database', databaseRoutes);
 
 // 根路由
 app.get('/', (req, res) => {
