@@ -1,19 +1,53 @@
+# 依赖目录
 node_modules
 npm-debug.log
-Dockerfile
-.dockerignore
-.git
-.gitignore
-README.md
+yarn-error.log
+
+# 环境变量文件（不应包含在镜像中）
 .env
 .env.local
-.env.development
-.env.test
-.nyc_output
+.env.*.local
+
+# 数据目录（应通过卷挂载）
+data
+uploads
+backups
+migrations
+logs
+
+# 版本控制
+.git
+.gitignore
+.gitattributes
+
+# IDE配置
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# 测试和文档
+test
+tests
+*.test.js
+*.spec.js
 coverage
 .nyc_output
-.coverage
-.vscode
+
+# 文档
+README.md
+README-*.md
+CHANGELOG.md
+LICENSE
+docs
+
+# CI/CD
+.github
+.gitlab-ci.yml
+.travis.yml
+
+# 其他
 .DS_Store
-uploads/*
-!uploads/.gitkeep
+Thumbs.db
+*.log

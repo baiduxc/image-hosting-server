@@ -4,11 +4,20 @@ FROM node:18-alpine
 # 设置工作目录
 WORKDIR /app
 
+# 安装构建依赖（用于编译 better-sqlite3 等原生模块）
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    gcc \
+    libc-dev \
+    sqlite-dev
+
 # 复制package.json和package-lock.json
 COPY package*.json ./
 
-# 安装依赖
-RUN npm ci --only=production
+# 安装依赖（使用 npm install 而不是 npm ci，因为可能需要重新编译原生模块）
+RUN npm install --only=production --no-audit --no-fund
 
 # 复制应用代码
 COPY . .
