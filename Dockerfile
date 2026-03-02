@@ -16,8 +16,8 @@ RUN apk add --no-cache \
 # 复制package.json和package-lock.json
 COPY package*.json ./
 
-# 安装依赖（使用 npm install 而不是 npm ci，因为可能需要重新编译原生模块）
-RUN npm install --only=production --no-audit --no-fund
+# 安装依赖
+RUN npm install --omit=dev --no-audit --no-fund
 
 # 复制应用代码
 COPY . .

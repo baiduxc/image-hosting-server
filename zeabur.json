@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.zeabur.app/zeabur.json",
+  "build": {
+    "type": "dockerfile",
+    "dockerfile": "Dockerfile"
+  },
+  "start": {
+    "command": "npm start"
+  },
+  "healthcheck": {
+    "path": "/api/health",
+    "port": 3001
+  }
+}

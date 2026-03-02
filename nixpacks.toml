@@ -1,8 +1,8 @@
 [phases.setup]
-nixPkgs = ["nodejs-18_x", "npm-9_x"]
+nixPkgs = ["nodejs_18", "python3", "gcc", "gnumake", "sqlite"]
 
 [phases.install]
-cmds = ["npm ci --only=production"]
+cmds = ["npm install --omit=dev"]
 
 [phases.build]
 cmds = ["echo 'Build complete'"]
