@@ -10,7 +10,8 @@ const {
   statsDB,
   userDB,
   configDB,
-  storageDB
+  storageDB,
+  apiKeyDB
 } = require('./databaseOperations');
 
 // 导出接口（保持向后兼容）
@@ -23,5 +24,6 @@ module.exports = {
   statsDB,
   userDB,
   configDB,
-  storageDB
+  storageDB,
+  apiKeyDB
 };

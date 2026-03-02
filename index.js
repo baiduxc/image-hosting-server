@@ -21,6 +21,7 @@ const userRoutes = require('./routes/users');
 const configRoutes = require('./routes/config');
 const storageRoutes = require('./routes/storage');
 const databaseRoutes = require('./routes/database');
+const apiRoutes = require('./routes/api');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -60,6 +61,8 @@ app.use('/api/users', userRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/storage', storageRoutes);
 app.use('/api/database', databaseRoutes);
+app.use('/api/v1', apiRoutes);  // 公开 API v1
+app.use('/api/keys', apiRoutes);  // API 密钥管理（兼容路径）
 
 // 根路由
 app.get('/', (req, res) => {

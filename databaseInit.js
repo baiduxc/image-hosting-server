@@ -102,6 +102,22 @@ async function initSQLiteDatabase() {
     )
   `);
 
+  // 创建 API 密钥表
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      api_key TEXT UNIQUE NOT NULL,
+      permissions TEXT DEFAULT '["upload","view"]',
+      is_active INTEGER DEFAULT 1,
+      last_used_at TEXT,
+      expires_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
   // 创建索引
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
@@ -112,6 +128,8 @@ async function initSQLiteDatabase() {
     CREATE INDEX IF NOT EXISTS idx_images_upload_type ON images(upload_type);
     CREATE INDEX IF NOT EXISTS idx_images_is_deleted ON images(is_deleted);
     CREATE INDEX IF NOT EXISTS idx_upload_stats_date ON upload_stats(date DESC);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
+    CREATE INDEX IF NOT EXISTS idx_api_keys_api_key ON api_keys(api_key);
   `);
 
   // 创建默认管理员账户
@@ -252,6 +270,22 @@ async function initPostgresDatabase() {
     )
   `);
 
+  // 创建 API 密钥表
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name VARCHAR(100) NOT NULL,
+      api_key VARCHAR(64) UNIQUE NOT NULL,
+      permissions JSONB DEFAULT '["upload","view"]',
+      is_active BOOLEAN DEFAULT TRUE,
+      last_used_at TIMESTAMP WITH TIME ZONE,
+      expires_at TIMESTAMP WITH TIME ZONE,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
   // 检查并添加 storage_id 列
   const storageColumnCheck = await pool.query(`
     SELECT column_name 
@@ -277,6 +311,8 @@ async function initPostgresDatabase() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_images_upload_type ON images(upload_type)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_images_is_deleted ON images(is_deleted)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_upload_stats_date ON upload_stats(date DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_api_keys_api_key ON api_keys(api_key)`);
 
   // 创建默认管理员账户
   const adminExists = await pool.query(`

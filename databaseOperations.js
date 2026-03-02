@@ -879,6 +879,194 @@ const storageDB = {
   }
 };
 
+// API 密钥数据库操作
+const apiKeyDB = {
+  // 生成随机 API 密钥
+  generateApiKey() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let key = 'sk_';
+    for (let i = 0; i < 48; i++) {
+      key += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return key;
+  },
+
+  // 创建 API 密钥
+  async createApiKey(userId, name, permissions = ['upload', 'view'], expiresAt = null) {
+    const apiKey = this.generateApiKey();
+    
+    if (DB_TYPE === 'sqlite') {
+      const db = dbAdapter.getConnection();
+      const result = db.prepare(`
+        INSERT INTO api_keys (user_id, name, api_key, permissions, expires_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(userId, name, apiKey, JSON.stringify(permissions), expiresAt);
+      
+      return {
+        id: result.lastInsertRowid,
+        user_id: userId,
+        name,
+        api_key: apiKey,
+        permissions,
+        is_active: true,
+        expires_at: expiresAt,
+        created_at: new Date().toISOString()
+      };
+    } else {
+      const query = `
+        INSERT INTO api_keys (user_id, name, api_key, permissions, expires_at)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING *
+      `;
+      const result = await dbAdapter.query(query, [userId, name, apiKey, JSON.stringify(permissions), expiresAt]);
+      const row = result.rows[0];
+      return {
+        ...row,
+        permissions: fromJSON(row.permissions)
+      };
+    }
+  },
+
+  // 获取用户的所有 API 密钥
+  async getApiKeysByUserId(userId) {
+    const query = DB_TYPE === 'sqlite'
+      ? 'SELECT * FROM api_keys WHERE user_id = ? ORDER BY created_at DESC'
+      : 'SELECT * FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC';
+    
+    const result = await dbAdapter.query(query, [userId]);
+    
+    return result.rows.map(row => ({
+      ...row,
+      permissions: fromJSON(row.permissions),
+      is_active: fromBool(row.is_active)
+    }));
+  },
+
+  // 通过 API 密钥获取信息（用于鉴权）
+  async getByApiKey(apiKey) {
+    const activeCheck = DB_TYPE === 'sqlite' ? 'is_active = 1' : 'is_active = true';
+    const query = DB_TYPE === 'sqlite'
+      ? `SELECT ak.*, u.id as owner_id, u.username, u.role, u.is_disabled 
+         FROM api_keys ak 
+         JOIN users u ON ak.user_id = u.id 
+         WHERE ak.api_key = ? AND ak.${activeCheck}`
+      : `SELECT ak.*, u.id as owner_id, u.username, u.role, u.is_disabled 
+         FROM api_keys ak 
+         JOIN users u ON ak.user_id = u.id 
+         WHERE ak.api_key = $1 AND ak.${activeCheck}`;
+    
+    const result = await dbAdapter.query(query, [apiKey]);
+    
+    if (result.rows[0]) {
+      const row = result.rows[0];
+      return {
+        ...row,
+        permissions: fromJSON(row.permissions),
+        is_active: fromBool(row.is_active),
+        is_disabled: fromBool(row.is_disabled)
+      };
+    }
+    return null;
+  },
+
+  // 更新最后使用时间
+  async updateLastUsed(apiKeyId) {
+    const now = DB_TYPE === 'sqlite' ? "datetime('now')" : 'CURRENT_TIMESTAMP';
+    const query = DB_TYPE === 'sqlite'
+      ? `UPDATE api_keys SET last_used_at = ${now} WHERE id = ?`
+      : `UPDATE api_keys SET last_used_at = ${now} WHERE id = $1`;
+    
+    await dbAdapter.query(query, [apiKeyId]);
+  },
+
+  // 删除 API 密钥
+  async deleteApiKey(id, userId) {
+    const query = DB_TYPE === 'sqlite'
+      ? 'DELETE FROM api_keys WHERE id = ? AND user_id = ?'
+      : 'DELETE FROM api_keys WHERE id = $1 AND user_id = $2';
+    
+    const result = await dbAdapter.query(query, [id, userId]);
+    return DB_TYPE === 'sqlite' ? result.changes > 0 : result.rowCount > 0;
+  },
+
+  // 切换 API 密钥状态
+  async toggleApiKey(id, userId) {
+    if (DB_TYPE === 'sqlite') {
+      const db = dbAdapter.getConnection();
+      db.prepare(`
+        UPDATE api_keys 
+        SET is_active = CASE WHEN is_active = 1 THEN 0 ELSE 1 END,
+            updated_at = datetime('now')
+        WHERE id = ? AND user_id = ?
+      `).run(id, userId);
+      
+      const updated = db.prepare('SELECT * FROM api_keys WHERE id = ?').get(id);
+      if (updated) {
+        return {
+          ...updated,
+          permissions: fromJSON(updated.permissions),
+          is_active: fromBool(updated.is_active)
+        };
+      }
+      return null;
+    } else {
+      const query = `
+        UPDATE api_keys 
+        SET is_active = NOT is_active, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 AND user_id = $2
+        RETURNING *
+      `;
+      const result = await dbAdapter.query(query, [id, userId]);
+      if (result.rows[0]) {
+        return {
+          ...result.rows[0],
+          permissions: fromJSON(result.rows[0].permissions)
+        };
+      }
+      return null;
+    }
+  },
+
+  // 更新 API 密钥信息
+  async updateApiKey(id, userId, updates) {
+    const { name, permissions } = updates;
+    
+    if (DB_TYPE === 'sqlite') {
+      const db = dbAdapter.getConnection();
+      db.prepare(`
+        UPDATE api_keys 
+        SET name = ?, permissions = ?, updated_at = datetime('now')
+        WHERE id = ? AND user_id = ?
+      `).run(name, JSON.stringify(permissions), id, userId);
+      
+      const updated = db.prepare('SELECT * FROM api_keys WHERE id = ?').get(id);
+      if (updated) {
+        return {
+          ...updated,
+          permissions: fromJSON(updated.permissions),
+          is_active: fromBool(updated.is_active)
+        };
+      }
+      return null;
+    } else {
+      const query = `
+        UPDATE api_keys 
+        SET name = $1, permissions = $2, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $3 AND user_id = $4
+        RETURNING *
+      `;
+      const result = await dbAdapter.query(query, [name, JSON.stringify(permissions), id, userId]);
+      if (result.rows[0]) {
+        return {
+          ...result.rows[0],
+          permissions: fromJSON(result.rows[0].permissions)
+        };
+      }
+      return null;
+    }
+  }
+};
+
 // 测试数据库连接
 const testConnection = async () => {
   return await dbAdapter.testConnection();
@@ -901,6 +1089,7 @@ module.exports = {
   userDB,
   configDB,
   storageDB,
+  apiKeyDB,
   dbAdapter,
   DB_TYPE
 };
