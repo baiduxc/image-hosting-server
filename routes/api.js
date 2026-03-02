@@ -4,7 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { imageDB, apiKeyDB, storageDB } = require('../database');
 const { authenticate, authenticateApiKey, requireApiPermission } = require('../middleware/auth');
-const { uploadToStorage, deleteFromStorage } = require('../storageService');
+const { uploadToStorage, deleteFromStorage } = require('../services/storageService');
 
 const router = express.Router();
 

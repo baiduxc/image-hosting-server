@@ -1,6 +1,7 @@
 const express = require('express');
 const { configDB } = require('../database');
 const { authenticate, requireAdmin } = require('../middleware/auth');
+const nodemailer = require('nodemailer');
 
 const router = express.Router();
 
@@ -111,55 +112,7 @@ router.post('/', authenticate, requireAdmin, async (req, res) => {
   }
 });
 
-// 设置单个配置项
-router.post('/:key', authenticate, requireAdmin, async (req, res) => {
-  try {
-    const { key } = req.params;
-    const { value, description } = req.body;
-    
-    const result = await configDB.setConfig(key, value, description);
-    
-    res.json({
-      success: true,
-      message: '配置项设置成功',
-      data: result
-    });
-  } catch (error) {
-    console.error('设置配置项失败:', error);
-    res.status(500).json({
-      success: false,
-      message: '设置配置项失败',
-      error: error.message
-    });
-  }
-});
-
-// 删除配置项（管理员）
-router.delete('/:key', authenticate, requireAdmin, async (req, res) => {
-  try {
-    const { key } = req.params;
-    const result = await configDB.deleteConfig(key);
-    
-    if (!result) {
-      return res.status(404).json({
-        success: false,
-        message: '配置项不存在'
-      });
-    }
-    
-    res.json({
-      success: true,
-      message: '配置项删除成功'
-    });
-  } catch (error) {
-    console.error('删除配置项失败:', error);
-    res.status(500).json({
-      success: false,
-      message: '删除配置项失败',
-      error: error.message
-    });
-  }
-});
+// ============ 具体路由必须在参数路由之前 ============
 
 // 测试存储连接
 router.post('/test-storage', authenticate, requireAdmin, async (req, res) => {
@@ -259,8 +212,6 @@ router.post('/test-email', authenticate, requireAdmin, async (req, res) => {
     console.log(`认证用户: ${smtpUser}`);
     console.log(`发件人: ${fromEmail}`);
     console.log(`收件人: ${testEmail}`);
-
-    const nodemailer = require('nodemailer');
     
     // 创建邮件传输器配置
     const transportConfig = {
@@ -271,13 +222,16 @@ router.post('/test-email', authenticate, requireAdmin, async (req, res) => {
         user: smtpUser,
         pass: smtpPass
       },
+      // 对于 Gmail 和其他服务的特殊配置
       tls: {
         rejectUnauthorized: false,
         minVersion: 'TLSv1.2'
       },
+      // 增加超时时间
       connectionTimeout: 10000,
       greetingTimeout: 10000,
       socketTimeout: 10000,
+      // 启用调试模式
       debug: true,
       logger: true
     };
@@ -286,7 +240,9 @@ router.post('/test-email', authenticate, requireAdmin, async (req, res) => {
     if (smtpHost.includes('gmail')) {
       console.log('🔍 检测到 Gmail，应用特殊配置...');
       transportConfig.service = 'gmail';
+      // Gmail 使用 OAuth2 或应用专用密码
       console.log('⚠️ 提示: Gmail 需要使用"应用专用密码"而不是账户密码');
+      console.log('📝 设置方法: https://myaccount.google.com/apppasswords');
     }
 
     const transporter = nodemailer.createTransporter(transportConfig);
@@ -303,18 +259,17 @@ router.post('/test-email', authenticate, requireAdmin, async (req, res) => {
         message: `SMTP 连接验证失败: ${verifyError.message}`,
         error: verifyError.message,
         hint: smtpHost.includes('gmail') 
-          ? 'Gmail 用户请确保使用"应用专用密码"，设置地址: https://myaccount.google.com/apppasswords'
+          ? 'Gmail 用户请确保使用"应用专用密码"，并启用"允许不够安全的应用"（如果适用）'
           : '请检查 SMTP 服务器地址、端口和认证信息是否正确'
       });
     }
     
-    // 发送测试邮件
-    console.log('📤 发送测试邮件...');
-    const info = await transporter.sendMail({
-      from: `"图床系统" <${fromEmail}>`,
+    // 构建邮件内容
+    const mailOptions = {
+      from: `"图床系统" <${fromEmail}>`, // 使用友好的发件人名称
       to: testEmail,
       subject: '图床管理系统 - 邮件配置测试',
-      text: '这是一封测试邮件，如果您收到此邮件，说明邮件配置成功！',
+      text: '这是一封测试邮件，如果您收到此邮件，说明邮件配置成功！', // 纯文本版本
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #0052d9;">📧 邮件配置测试成功！</h2>
@@ -325,17 +280,27 @@ router.post('/test-email', authenticate, requireAdmin, async (req, res) => {
               <li>SMTP服务器: ${smtpHost}:${smtpPort}</li>
               <li>发送邮箱: ${fromEmail}</li>
               <li>发送时间: ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}</li>
+              <li>消息ID: 将在发送后生成</li>
             </ul>
           </div>
           <hr>
           <p style="color: #666; font-size: 12px;">这是一封自动发送的测试邮件，请勿回复。</p>
+          <p style="color: #999; font-size: 11px;">如果您没有收到此邮件，请检查垃圾邮件文件夹。</p>
         </div>
       `
-    });
+    };
 
+    // 发送测试邮件
+    console.log('📤 发送测试邮件...');
+    const info = await transporter.sendMail(mailOptions);
+    
     console.log('✅ 邮件发送成功！');
     console.log('消息ID:', info.messageId);
+    console.log('响应:', info.response);
+    console.log('已接受:', info.accepted);
+    console.log('已拒绝:', info.rejected);
 
+    // 关闭传输器
     transporter.close();
     
     res.json({
@@ -343,13 +308,18 @@ router.post('/test-email', authenticate, requireAdmin, async (req, res) => {
       message: '邮件发送测试成功！请检查邮箱（包括垃圾邮件文件夹）',
       data: {
         messageId: info.messageId,
+        response: info.response,
         accepted: info.accepted,
-        rejected: info.rejected
-      }
+        rejected: info.rejected,
+        pending: info.pending
+      },
+      hint: '如果5分钟内未收到邮件，请检查：\n1. 垃圾邮件文件夹\n2. SMTP 配置是否正确\n3. Gmail 用户是否使用了应用专用密码'
     });
   } catch (error) {
     console.error('❌ 测试邮件发送失败:', error);
+    console.error('错误详情:', error.stack);
     
+    // 提供更详细的错误信息
     let errorMessage = error.message;
     let errorHint = '';
     
@@ -370,6 +340,58 @@ router.post('/test-email', authenticate, requireAdmin, async (req, res) => {
       error: error.message,
       code: error.code,
       hint: errorHint
+    });
+  }
+});
+
+// ============ 参数路由放在最后 ============
+
+// 设置单个配置项
+router.post('/:key', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { key } = req.params;
+    const { value, description } = req.body;
+    
+    const result = await configDB.setConfig(key, value, description);
+    
+    res.json({
+      success: true,
+      message: '配置项设置成功',
+      data: result
+    });
+  } catch (error) {
+    console.error('设置配置项失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '设置配置项失败',
+      error: error.message
+    });
+  }
+});
+
+// 删除配置项（管理员）
+router.delete('/:key', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { key } = req.params;
+    const result = await configDB.deleteConfig(key);
+    
+    if (!result) {
+      return res.status(404).json({
+        success: false,
+        message: '配置项不存在'
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: '配置项删除成功'
+    });
+  } catch (error) {
+    console.error('删除配置项失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '删除配置项失败',
+      error: error.message
     });
   }
 });
