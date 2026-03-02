@@ -4,8 +4,13 @@
 [![Express](https://img.shields.io/badge/Express-5.1.0-blue.svg)](https://expressjs.com/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-14+-blue.svg)](https://www.postgresql.org/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/baiduxc/image-hosting-server&env=DATABASE_URL,JWT_SECRET&envDescription=配置数据库和JWT密钥&project-name=image-hosting-api)
 
 专业的图片存储和管理系统后端服务，支持多云存储、用户管理、权限控制等功能。
+
+## ⚡ 一键部署
+
+点击上方 **Deploy with Vercel** 按钮即可快速部署。详细说明请参阅 [Vercel 部署指南](./VERCEL-DEPLOY.md)。
 
 ## 🚀 功能特性
 

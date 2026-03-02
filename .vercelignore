@@ -1,0 +1,14 @@
+node_modules
+.env
+.env.local
+*.log
+.git
+.gitignore
+docker-compose.yml
+docker-compose.yml.example
+Dockerfile
+Dockerfile.optimized
+.dockerignore
+deploy.bat
+deploy.sh
+*.md
