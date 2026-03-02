@@ -245,7 +245,7 @@ router.post('/test-email', authenticate, requireAdmin, async (req, res) => {
       console.log('📝 设置方法: https://myaccount.google.com/apppasswords');
     }
 
-    const transporter = nodemailer.createTransporter(transportConfig);
+    const transporter = nodemailer.createTransport(transportConfig);
 
     // 验证连接配置
     console.log('🔐 验证 SMTP 连接...');
