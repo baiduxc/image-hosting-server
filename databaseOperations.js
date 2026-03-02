@@ -350,6 +350,22 @@ const userDB = {
     }
   },
 
+  // 检查用户名是否存在
+  async usernameExists(username) {
+    const user = await this.getByUsername(username);
+    return !!user;
+  },
+
+  // 检查邮箱是否存在（可选排除指定用户ID）
+  async emailExists(email, excludeUserId = null) {
+    const query = excludeUserId
+      ? 'SELECT id FROM users WHERE email = $1 AND id != $2'
+      : 'SELECT id FROM users WHERE email = $1';
+    const values = excludeUserId ? [email, excludeUserId] : [email];
+    const result = await dbAdapter.query(query, values);
+    return result.rows.length > 0;
+  },
+
   // 根据用户名查找用户
   async getByUsername(username) {
     const disabledCheck = DB_TYPE === 'sqlite' ? 'is_disabled = 0' : 'is_disabled = FALSE';
