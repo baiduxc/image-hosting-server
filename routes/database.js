@@ -557,5 +557,328 @@ function createSQLiteTables(db) {
   `);
 }
 
+// 从备份恢复数据库（仅SQLite）
+router.post('/restore', authenticate, requireAdmin, async (req, res) => {
+  let tempDb = null;
+  
+  try {
+    const { fileName } = req.body;
+    
+    if (!fileName) {
+      return res.status(400).json({
+        success: false,
+        message: '请提供备份文件名'
+      });
+    }
+    
+    if (DB_TYPE !== 'sqlite') {
+      return res.status(400).json({
+        success: false,
+        message: '当前数据库类型不支持此恢复功能'
+      });
+    }
+    
+    // 安全检查
+    if (fileName.includes('..') || fileName.includes('/') || fileName.includes('\\')) {
+      return res.status(400).json({
+        success: false,
+        message: '无效的文件名'
+      });
+    }
+    
+    const backupDir = path.join(__dirname, '..', 'backups');
+    const backupPath = path.join(backupDir, fileName);
+    
+    if (!fs.existsSync(backupPath)) {
+      return res.status(404).json({
+        success: false,
+        message: '备份文件不存在'
+      });
+    }
+    
+    // 验证备份文件是否为有效的 SQLite 数据库
+    try {
+      const Database = require('better-sqlite3');
+      tempDb = new Database(backupPath, { readonly: true });
+      tempDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get();
+      tempDb.close();
+      tempDb = null;
+    } catch (error) {
+      if (tempDb) {
+        try { tempDb.close(); } catch(e) {}
+      }
+      return res.status(400).json({
+        success: false,
+        message: '备份文件不是有效的 SQLite 数据库或缺少必要表'
+      });
+    }
+    
+    // 先备份当前数据库（确保有数据可回滚）
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const autoBackupPath = path.join(backupDir, `auto-backup-before-restore-${timestamp}.sqlite`);
+    
+    // 在关闭连接前，先复制当前数据库
+    if (fs.existsSync(SQLITE_PATH)) {
+      try {
+        fs.copyFileSync(SQLITE_PATH, autoBackupPath);
+        console.log('✅ 当前数据库已备份到:', autoBackupPath);
+      } catch (copyError) {
+        console.error('备份当前数据库失败:', copyError);
+        return res.status(500).json({
+          success: false,
+          message: '备份当前数据库失败，恢复操作已取消'
+        });
+      }
+    }
+    
+    // 关闭当前数据库连接
+    try {
+      const currentDb = dbAdapter.getConnection();
+      if (currentDb && currentDb.close) {
+        currentDb.close();
+      }
+    } catch (closeError) {
+      console.log('关闭数据库连接:', closeError.message);
+    }
+    
+    // 验证备份文件仍然有效
+    if (!fs.existsSync(backupPath)) {
+      return res.status(500).json({
+        success: false,
+        message: '备份文件在恢复过程中丢失'
+      });
+    }
+    
+    // 执行恢复：复制备份文件到数据库路径
+    try {
+      fs.copyFileSync(backupPath, SQLITE_PATH);
+      console.log('✅ 数据库已恢复:', backupPath, '->', SQLITE_PATH);
+    } catch (restoreError) {
+      console.error('恢复数据库失败:', restoreError);
+      // 尝试从自动备份恢复
+      if (fs.existsSync(autoBackupPath)) {
+        try {
+          fs.copyFileSync(autoBackupPath, SQLITE_PATH);
+          console.log('✅ 已从自动备份恢复');
+        } catch (rollbackError) {
+          console.error('回滚失败:', rollbackError);
+        }
+      }
+      return res.status(500).json({
+        success: false,
+        message: '恢复数据库失败，已尝试回滚到原始状态'
+      });
+    }
+    
+    // 重新打开数据库连接
+    try {
+      const Database = require('better-sqlite3');
+      const newDb = new Database(SQLITE_PATH);
+      newDb.pragma('journal_mode = WAL');
+      newDb.pragma('foreign_keys = ON');
+      
+      // 测试连接
+      newDb.prepare("SELECT 1").get();
+      
+      // 更新数据库连接引用
+      if (dbAdapter && typeof dbAdapter._setConnection === 'function') {
+        dbAdapter._setConnection(newDb);
+      } else if (dbAdapter) {
+        dbAdapter._db = newDb;
+      }
+      
+      console.log('✅ 数据库连接已重新建立');
+    } catch (openError) {
+      console.error('重新打开数据库失败:', openError);
+      return res.status(500).json({
+        success: false,
+        message: '数据库恢复成功但无法重新打开，请重启服务',
+        error: openError.message
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: '数据库恢复成功，请重新登录',
+      data: {
+        autoBackup: path.basename(autoBackupPath)
+      }
+    });
+    
+  } catch (error) {
+    console.error('数据库恢复失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '数据库恢复失败: ' + error.message
+    });
+  }
+});
+
+// 上传备份文件并恢复（仅SQLite）
+const multer = require('multer');
+const upload = multer({ 
+  dest: path.join(__dirname, '..', 'uploads', 'temp'),
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB
+  fileFilter: (req, file, cb) => {
+    const validExts = ['.db', '.sqlite', '.sql', '.zip', '.gz'];
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (validExts.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error('不支持的文件格式'));
+    }
+  }
+});
+
+// 确保上传目录存在
+const uploadDir = path.join(__dirname, '..', 'uploads', 'temp');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+router.post('/restore-upload', authenticate, requireAdmin, upload.single('file'), async (req, res) => {
+  let tempPath = null;
+  let tempDb = null;
+  
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: '请上传备份文件'
+      });
+    }
+    
+    if (DB_TYPE !== 'sqlite') {
+      // 删除临时文件
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({
+        success: false,
+        message: '当前数据库类型不支持此恢复功能'
+      });
+    }
+    
+    tempPath = req.file.path;
+    const backupDir = path.join(__dirname, '..', 'backups');
+    
+    // 验证文件是否为有效的 SQLite 数据库
+    try {
+      const Database = require('better-sqlite3');
+      tempDb = new Database(tempPath, { readonly: true });
+      tempDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get();
+      tempDb.close();
+      tempDb = null;
+    } catch (error) {
+      if (tempDb) {
+        try { tempDb.close(); } catch(e) {}
+      }
+      if (tempPath && fs.existsSync(tempPath)) {
+        fs.unlinkSync(tempPath);
+      }
+      return res.status(400).json({
+        success: false,
+        message: '上传的文件不是有效的 SQLite 数据库或缺少必要表'
+      });
+    }
+    
+    // 先备份当前数据库
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const autoBackupPath = path.join(backupDir, `auto-backup-before-upload-${timestamp}.sqlite`);
+    
+    if (fs.existsSync(SQLITE_PATH)) {
+      try {
+        fs.copyFileSync(SQLITE_PATH, autoBackupPath);
+        console.log('✅ 当前数据库已备份到:', autoBackupPath);
+      } catch (copyError) {
+        if (tempPath && fs.existsSync(tempPath)) {
+          fs.unlinkSync(tempPath);
+        }
+        console.error('备份当前数据库失败:', copyError);
+        return res.status(500).json({
+          success: false,
+          message: '备份当前数据库失败，恢复操作已取消'
+        });
+      }
+    }
+    
+    // 关闭当前数据库连接
+    try {
+      const currentDb = dbAdapter.getConnection();
+      if (currentDb && currentDb.close) {
+        currentDb.close();
+      }
+    } catch (closeError) {
+      console.log('关闭数据库连接:', closeError.message);
+    }
+    
+    // 执行恢复
+    try {
+      fs.copyFileSync(tempPath, SQLITE_PATH);
+      fs.unlinkSync(tempPath);
+      tempPath = null;
+      console.log('✅ 数据库已恢复');
+    } catch (restoreError) {
+      console.error('恢复数据库失败:', restoreError);
+      // 尝试回滚
+      if (fs.existsSync(autoBackupPath)) {
+        try {
+          fs.copyFileSync(autoBackupPath, SQLITE_PATH);
+          console.log('✅ 已从自动备份恢复');
+        } catch (rollbackError) {
+          console.error('回滚失败:', rollbackError);
+        }
+      }
+      return res.status(500).json({
+        success: false,
+        message: '恢复数据库失败，已尝试回滚'
+      });
+    }
+    
+    // 重新打开数据库
+    try {
+      const Database = require('better-sqlite3');
+      const newDb = new Database(SQLITE_PATH);
+      newDb.pragma('journal_mode = WAL');
+      newDb.pragma('foreign_keys = ON');
+      newDb.prepare("SELECT 1").get();
+      
+      if (dbAdapter && typeof dbAdapter._setConnection === 'function') {
+        dbAdapter._setConnection(newDb);
+      } else if (dbAdapter) {
+        dbAdapter._db = newDb;
+      }
+      
+      console.log('✅ 数据库连接已重新建立');
+    } catch (openError) {
+      console.error('重新打开数据库失败:', openError);
+      return res.status(500).json({
+        success: false,
+        message: '数据库恢复成功但无法重新打开，请重启服务'
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: '数据库恢复成功，请重新登录',
+      data: {
+        autoBackup: path.basename(autoBackupPath)
+      }
+    });
+    
+  } catch (error) {
+    // 清理
+    if (tempDb) {
+      try { tempDb.close(); } catch(e) {}
+    }
+    if (tempPath && fs.existsSync(tempPath)) {
+      fs.unlinkSync(tempPath);
+    }
+    console.error('数据库恢复失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '数据库恢复失败: ' + error.message
+    });
+  }
+});
+
 module.exports = router;
 

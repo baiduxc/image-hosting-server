@@ -47,6 +47,15 @@ const fromJSON = (value) => {
   return value;
 };
 
+// 工具函数：获取当前北京时间（数据库使用）
+const getBeijingTime = () => {
+  if (DB_TYPE === 'sqlite') {
+    return "datetime('now', '+8 hours')";
+  } else {
+    return "CURRENT_TIMESTAMP + INTERVAL '8 hours'";
+  }
+};
+
 // 图片数据库操作
 const imageDB = {
   // 插入新图片记录
@@ -206,7 +215,7 @@ const imageDB = {
       throw new Error('没有要更新的字段');
     }
 
-    const now = DB_TYPE === 'sqlite' ? "datetime('now')" : "CURRENT_TIMESTAMP";
+    const now = DB_TYPE === 'sqlite' ? "datetime('now', '+8 hours')" : "CURRENT_TIMESTAMP + INTERVAL '8 hours'";
     fields.push(`updated_at = ${now}`);
     values.push(id);
 
@@ -235,7 +244,7 @@ const imageDB = {
   // 软删除图片
   async delete(id) {
     const deletedVal = toBool(true);
-    const now = DB_TYPE === 'sqlite' ? "datetime('now')" : "CURRENT_TIMESTAMP";
+    const now = DB_TYPE === 'sqlite' ? "datetime('now', '+8 hours')" : "CURRENT_TIMESTAMP + INTERVAL '8 hours'";
     
     if (DB_TYPE === 'sqlite') {
       const db = dbAdapter.getConnection();
@@ -248,7 +257,7 @@ const imageDB = {
     } else {
       const query = `
         UPDATE images 
-        SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP
+        SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP + INTERVAL '8 hours'
         WHERE id = $1 AND is_deleted = FALSE
         RETURNING *
       `;
@@ -268,7 +277,7 @@ const imageDB = {
       const placeholders = ids.map(() => '?').join(',');
       db.prepare(`
         UPDATE images 
-        SET is_deleted = ?, updated_at = datetime('now')
+        SET is_deleted = ?, updated_at = datetime('now', '+8 hours')
         WHERE id IN (${placeholders}) AND is_deleted = 0
       `).run(deletedVal, ...ids);
       
@@ -277,7 +286,7 @@ const imageDB = {
     } else {
       const query = `
         UPDATE images 
-        SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP
+        SET is_deleted = TRUE, updated_at = CURRENT_TIMESTAMP + INTERVAL '8 hours'
         WHERE id = ANY($1) AND is_deleted = FALSE
         RETURNING *
       `;
@@ -320,7 +329,7 @@ const imageDB = {
 
 // 用户数据库操作
 const userDB = {
-  // 创建新用户
+  // 创建新用户（使用北京时间 UTC+8）
   async create(userData) {
     const {
       username,
@@ -333,15 +342,15 @@ const userDB = {
     if (DB_TYPE === 'sqlite') {
       const db = dbAdapter.getConnection();
       const info = db.prepare(`
-        INSERT INTO users (username, email, password_hash, role, avatar_url)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO users (username, email, password_hash, role, avatar_url, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, datetime('now', '+8 hours'), datetime('now', '+8 hours'))
       `).run(username, email, passwordHash, role, avatarUrl);
       
       return db.prepare('SELECT id, username, email, role, avatar_url, created_at FROM users WHERE id = ?').get(info.lastInsertRowid);
     } else {
       const query = `
-        INSERT INTO users (username, email, password_hash, role, avatar_url)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO users (username, email, password_hash, role, avatar_url, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP + INTERVAL '8 hours', CURRENT_TIMESTAMP + INTERVAL '8 hours')
         RETURNING id, username, email, role, avatar_url, created_at
       `;
       const values = [username, email, passwordHash, role, avatarUrl];
@@ -390,22 +399,21 @@ const userDB = {
     return result.rows[0];
   },
 
-  // 更新最后登录时间
+  // 更新最后登录时间（使用北京时间 UTC+8）
   async updateLastLogin(id) {
-    const now = DB_TYPE === 'sqlite' ? "datetime('now')" : "CURRENT_TIMESTAMP";
-    
     if (DB_TYPE === 'sqlite') {
       const db = dbAdapter.getConnection();
       db.prepare(`
         UPDATE users 
-        SET last_login_at = ${now}, updated_at = ${now}
+        SET last_login_at = datetime('now', '+8 hours'), updated_at = datetime('now', '+8 hours')
         WHERE id = ?
       `).run(id);
       return db.prepare('SELECT last_login_at FROM users WHERE id = ?').get(id);
     } else {
       const query = `
         UPDATE users 
-        SET last_login_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        SET last_login_at = CURRENT_TIMESTAMP + INTERVAL '8 hours', 
+            updated_at = CURRENT_TIMESTAMP + INTERVAL '8 hours'
         WHERE id = $1
         RETURNING last_login_at
       `;
@@ -417,7 +425,7 @@ const userDB = {
   // 更新用户个人资料
   async updateProfile(id, profileData) {
     const { email } = profileData;
-    const now = DB_TYPE === 'sqlite' ? "datetime('now')" : "CURRENT_TIMESTAMP";
+    const now = DB_TYPE === 'sqlite' ? "datetime('now', '+8 hours')" : "CURRENT_TIMESTAMP + INTERVAL '8 hours'";
     
     if (DB_TYPE === 'sqlite') {
       const db = dbAdapter.getConnection();
@@ -430,7 +438,7 @@ const userDB = {
     } else {
       const query = `
         UPDATE users 
-        SET email = $2, updated_at = CURRENT_TIMESTAMP
+        SET email = $2, updated_at = CURRENT_TIMESTAMP + INTERVAL '8 hours'
         WHERE id = $1
         RETURNING id, username, email, role, avatar_url, created_at, updated_at
       `;
@@ -457,7 +465,7 @@ const userDB = {
     const newPasswordHash = await bcrypt.hash(newPassword, 12);
 
     // 更新密码
-    const now = DB_TYPE === 'sqlite' ? "datetime('now')" : "CURRENT_TIMESTAMP";
+    const now = DB_TYPE === 'sqlite' ? "datetime('now', '+8 hours')" : "CURRENT_TIMESTAMP + INTERVAL '8 hours'";
     
     if (DB_TYPE === 'sqlite') {
       const db = dbAdapter.getConnection();
@@ -470,11 +478,274 @@ const userDB = {
     } else {
       const query = `
         UPDATE users 
-        SET password_hash = $2, updated_at = CURRENT_TIMESTAMP
+        SET password_hash = $2, updated_at = CURRENT_TIMESTAMP + INTERVAL '8 hours'
         WHERE id = $1
         RETURNING id
       `;
       const result = await dbAdapter.query(query, [id, newPasswordHash]);
+      return result.rows.length > 0;
+    }
+  },
+
+  // 设置邮箱验证令牌
+  async setEmailVerificationToken(id, token) {
+    const now = DB_TYPE === 'sqlite' ? "datetime('now', '+8 hours')" : "CURRENT_TIMESTAMP + INTERVAL '8 hours'";
+    
+    if (DB_TYPE === 'sqlite') {
+      const db = dbAdapter.getConnection();
+      db.prepare(`
+        UPDATE users 
+        SET email_verification_token = ?, email_verification_sent_at = ${now}
+        WHERE id = ?
+      `).run(token, id);
+      return true;
+    } else {
+      const query = `
+        UPDATE users 
+        SET email_verification_token = $2, email_verification_sent_at = CURRENT_TIMESTAMP + INTERVAL '8 hours'
+        WHERE id = $1
+      `;
+      await dbAdapter.query(query, [id, token]);
+      return true;
+    }
+  },
+
+  // 根据验证令牌查找用户
+  async getByVerificationToken(token) {
+    const query = `SELECT * FROM users WHERE email_verification_token = ${DB_TYPE === 'sqlite' ? '?' : '$1'}`;
+    const result = await dbAdapter.query(query, [token]);
+    return result.rows[0];
+  },
+
+  // 验证邮箱
+  async verifyEmail(token) {
+    const now = DB_TYPE === 'sqlite' ? "datetime('now', '+8 hours')" : "CURRENT_TIMESTAMP + INTERVAL '8 hours'";
+    
+    if (DB_TYPE === 'sqlite') {
+      const db = dbAdapter.getConnection();
+      const info = db.prepare(`
+        UPDATE users 
+        SET email_verified = 1, email_verification_token = NULL, updated_at = ${now}
+        WHERE email_verification_token = ?
+      `).run(token);
+      return info.changes > 0;
+    } else {
+      const query = `
+        UPDATE users 
+        SET email_verified = TRUE, email_verification_token = NULL, updated_at = CURRENT_TIMESTAMP + INTERVAL '8 hours'
+        WHERE email_verification_token = $1
+        RETURNING id
+      `;
+      const result = await dbAdapter.query(query, [token]);
+      return result.rows.length > 0;
+    }
+  },
+
+  // 重新发送验证邮件（清除旧令牌）
+  async clearVerificationToken(id) {
+    if (DB_TYPE === 'sqlite') {
+      const db = dbAdapter.getConnection();
+      db.prepare(`
+        UPDATE users 
+        SET email_verification_token = NULL, email_verification_sent_at = NULL
+        WHERE id = ?
+      `).run(id);
+      return true;
+    } else {
+      const query = `
+        UPDATE users 
+        SET email_verification_token = NULL, email_verification_sent_at = NULL
+        WHERE id = $1
+      `;
+      await dbAdapter.query(query, [id]);
+      return true;
+    }
+  },
+
+  // 获取用户列表（管理员）
+  async getList(options = {}) {
+    const { page = 1, limit = 20, search = '', role = null } = options;
+    const offset = (page - 1) * limit;
+    
+    let whereClause = 'WHERE 1=1';
+    const queryParams = [];
+    let paramIndex = 1;
+    
+    // 角色筛选
+    if (role) {
+      whereClause += ` AND role = ${DB_TYPE === 'sqlite' ? '?' : `$${paramIndex}`}`;
+      queryParams.push(role);
+      paramIndex++;
+    }
+    
+    // 搜索条件
+    if (search) {
+      const likeOp = DB_TYPE === 'sqlite' ? 'LIKE' : 'ILIKE';
+      whereClause += ` AND (username ${likeOp} ${DB_TYPE === 'sqlite' ? '?' : `$${paramIndex}`} OR email ${likeOp} ${DB_TYPE === 'sqlite' ? '?' : `$${paramIndex}`})`;
+      queryParams.push(`%${search}%`);
+      if (DB_TYPE === 'postgres') {
+        queryParams.push(`%${search}%`);
+        paramIndex++;
+      }
+      paramIndex++;
+    }
+    
+    // 查询总数
+    const countQuery = `SELECT COUNT(*) as count FROM users ${whereClause}`;
+    const countResult = await dbAdapter.query(countQuery, queryParams);
+    const total = parseInt(countResult.rows[0].count);
+    
+    // 查询用户数据
+    const dataQuery = `
+      SELECT id, username, email, role, avatar_url, is_disabled, 
+             email_verified, last_login_at, created_at, updated_at
+      FROM users 
+      ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT ${DB_TYPE === 'sqlite' ? '?' : `$${paramIndex}`} OFFSET ${DB_TYPE === 'sqlite' ? '?' : `$${paramIndex + 1}`}
+    `;
+    queryParams.push(limit, offset);
+    
+    const dataResult = await dbAdapter.query(dataQuery, queryParams);
+    
+    // 获取每个用户的图片数量，并转换字段名为驼峰命名
+    const usersWithImageCount = await Promise.all(
+      dataResult.rows.map(async (user) => {
+        const imageCount = await this.getImageCount(user.id);
+        return {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          role: user.role,
+          avatarUrl: user.avatar_url,
+          imageCount,
+          isDisabled: DB_TYPE === 'sqlite' ? user.is_disabled === 1 : user.is_disabled,
+          emailVerified: DB_TYPE === 'sqlite' ? user.email_verified === 1 : user.email_verified,
+          lastLoginAt: user.last_login_at,
+          createdAt: user.created_at,
+          updatedAt: user.updated_at
+        };
+      })
+    );
+    
+    return {
+      list: usersWithImageCount,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    };
+  },
+
+  // 获取用户图片数量
+  async getImageCount(userId) {
+    const deletedCheck = DB_TYPE === 'sqlite' ? 'is_deleted = 0' : 'is_deleted = FALSE';
+    const query = `SELECT COUNT(*) as count FROM images WHERE user_id = ${DB_TYPE === 'sqlite' ? '?' : '$1'} AND ${deletedCheck}`;
+    const result = await dbAdapter.query(query, [userId]);
+    return parseInt(result.rows[0].count);
+  },
+
+  // 获取用户统计
+  async getStats() {
+    // 总用户数
+    const totalQuery = 'SELECT COUNT(*) as count FROM users';
+    const totalResult = await dbAdapter.query(totalQuery);
+    const total = parseInt(totalResult.rows[0].count);
+    
+    // 活跃用户（未禁用）
+    const activeCheck = DB_TYPE === 'sqlite' ? 'is_disabled = 0' : 'is_disabled = FALSE';
+    const activeQuery = `SELECT COUNT(*) as count FROM users WHERE ${activeCheck}`;
+    const activeResult = await dbAdapter.query(activeQuery);
+    const active = parseInt(activeResult.rows[0].count);
+    
+    // 已禁用用户
+    const disabledCheck = DB_TYPE === 'sqlite' ? 'is_disabled = 1' : 'is_disabled = TRUE';
+    const disabledQuery = `SELECT COUNT(*) as count FROM users WHERE ${disabledCheck}`;
+    const disabledResult = await dbAdapter.query(disabledQuery);
+    const disabled = parseInt(disabledResult.rows[0].count);
+    
+    // 管理员数量
+    const adminQuery = "SELECT COUNT(*) as count FROM users WHERE role = 'admin'";
+    const adminResult = await dbAdapter.query(adminQuery);
+    const admin = parseInt(adminResult.rows[0].count);
+    
+    return { total, active, disabled, admin };
+  },
+
+  // 更新用户信息（管理员）
+  async update(id, updateData) {
+    const { email, role, isDisabled } = updateData;
+    const now = DB_TYPE === 'sqlite' ? "datetime('now', '+8 hours')" : "CURRENT_TIMESTAMP + INTERVAL '8 hours'";
+    
+    const fields = [];
+    const values = [];
+    let paramIndex = 1;
+    
+    if (email !== undefined) {
+      fields.push(`email = ${DB_TYPE === 'sqlite' ? '?' : `$${paramIndex}`}`);
+      values.push(email);
+      paramIndex++;
+    }
+    
+    if (role !== undefined) {
+      fields.push(`role = ${DB_TYPE === 'sqlite' ? '?' : `$${paramIndex}`}`);
+      values.push(role);
+      paramIndex++;
+    }
+    
+    if (isDisabled !== undefined) {
+      fields.push(`is_disabled = ${DB_TYPE === 'sqlite' ? '?' : `$${paramIndex}`}`);
+      values.push(DB_TYPE === 'sqlite' ? (isDisabled ? 1 : 0) : isDisabled);
+      paramIndex++;
+    }
+    
+    if (fields.length === 0) return null;
+    
+    fields.push(`updated_at = ${now}`);
+    values.push(id);
+    
+    if (DB_TYPE === 'sqlite') {
+      const db = dbAdapter.getConnection();
+      db.prepare(`
+        UPDATE users 
+        SET ${fields.join(', ')}
+        WHERE id = ?
+      `).run(...values);
+      
+      return db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+    } else {
+      const query = `
+        UPDATE users 
+        SET ${fields.join(', ')}
+        WHERE id = $${paramIndex}
+        RETURNING *
+      `;
+      const result = await dbAdapter.query(query, values);
+      return result.rows[0];
+    }
+  },
+
+  // 禁用用户
+  async disable(id) {
+    return this.update(id, { isDisabled: true });
+  },
+
+  // 启用用户
+  async enable(id) {
+    return this.update(id, { isDisabled: false });
+  },
+
+  // 删除用户
+  async delete(id) {
+    if (DB_TYPE === 'sqlite') {
+      const db = dbAdapter.getConnection();
+      const info = db.prepare('DELETE FROM users WHERE id = ?').run(id);
+      return info.changes > 0;
+    } else {
+      const query = 'DELETE FROM users WHERE id = $1 RETURNING id';
+      const result = await dbAdapter.query(query, [id]);
       return result.rows.length > 0;
     }
   }
@@ -494,7 +765,7 @@ const statsDB = {
           SET upload_count = upload_count + ?,
               total_size = total_size + ?,
               transfer_count = transfer_count + ?,
-              updated_at = datetime('now')
+              updated_at = datetime('now', '+8 hours')
           WHERE date = ?
         `).run(uploadCount, totalSize, transferCount, date);
       } else {
@@ -514,7 +785,7 @@ const statsDB = {
           upload_count = upload_stats.upload_count + $2,
           total_size = upload_stats.total_size + $3,
           transfer_count = upload_stats.transfer_count + $4,
-          updated_at = CURRENT_TIMESTAMP
+          updated_at = CURRENT_TIMESTAMP + INTERVAL '8 hours'
         RETURNING *
       `;
       const result = await dbAdapter.query(query, [date, uploadCount, totalSize, transferCount]);
@@ -571,12 +842,73 @@ const configDB = {
     const query = `SELECT config_value FROM system_configs WHERE config_key = ${DB_TYPE === 'sqlite' ? '?' : '$1'}`;
     const result = await dbAdapter.query(query, [key]);
     const value = result.rows[0]?.config_value || null;
-    return fromJSON(value);
+    return this._normalizeToCamelCase(fromJSON(value));
+  },
+
+  // 将下划线命名转换为驼峰命名
+  _normalizeToCamelCase(obj) {
+    if (!obj || typeof obj !== 'object') return obj;
+    
+    const camelCaseMap = {
+      // 系统配置
+      'site_title': 'siteName',
+      'site_logo': 'siteLogo',
+      'site_description': 'siteDescription',
+      'site_keywords': 'siteKeywords',
+      'site_icon': 'siteIcon',
+      'max_file_size': 'maxFileSize',
+      'max_batch_count': 'maxBatchCount',
+      'compress_quality': 'compressQuality',
+      'allowed_types': 'allowedTypes',
+      'auto_compress': 'autoCompress',
+      'generate_thumbnail': 'generateThumbnail',
+      'allow_register': 'allowRegistration',
+      // 安全配置
+      'require_email_verify': 'requireEmailVerification',
+      'jwt_expire_hours': 'jwtExpiration',
+      'max_login_attempts': 'maxLoginAttempts',
+      // 邮件配置
+      'smtp_host': 'smtpHost',
+      'smtp_port': 'smtpPort',
+      'smtp_secure': 'smtpSecure',
+      'from_email': 'fromEmail',
+      'smtp_user': 'smtpUser',
+      'smtp_pass': 'smtpPass',
+      // 存储配置
+      'secret_id': 'secretId',
+      'secret_key': 'secretKey',
+      'access_key': 'accessKey',
+      'access_key_id': 'accessKeyId',
+      'access_key_secret': 'accessKeySecret',
+      'secret_access_key': 'secretAccessKey',
+      'use_ssl': 'useSSL',
+      'use_cdn': 'useCDN',
+      'cdn_domain': 'cdnDomain',
+      'base_path': 'basePath',
+      'storage_type': 'storageType',
+      'custom_endpoint': 'customEndpoint',
+      'is_default': 'isDefault',
+      'created_at': 'createdAt',
+      'updated_at': 'updatedAt'
+    };
+    
+    const result = {};
+    for (const [key, val] of Object.entries(obj)) {
+      // 如果已经是驼峰命名，保留；如果是下划线，转换
+      const normalizedKey = camelCaseMap[key] || key;
+      // 如果驼峰命名的键已存在，优先使用它（新数据覆盖旧数据）
+      if (result[normalizedKey] === undefined) {
+        result[normalizedKey] = val;
+      }
+    }
+    return result;
   },
 
   // 设置配置
   async setConfig(key, value, description = null) {
-    const configValue = JSON.stringify(value || {});
+    // 规范化字段命名，统一使用驼峰
+    const normalizedValue = this._normalizeToCamelCase(value);
+    const configValue = JSON.stringify(normalizedValue || {});
     
     if (DB_TYPE === 'sqlite') {
       const db = dbAdapter.getConnection();
@@ -585,7 +917,7 @@ const configDB = {
       if (existing) {
         db.prepare(`
           UPDATE system_configs 
-          SET config_value = ?, description = COALESCE(?, description), updated_at = datetime('now')
+          SET config_value = ?, description = COALESCE(?, description), updated_at = datetime('now', '+8 hours')
           WHERE config_key = ?
         `).run(configValue, description, key);
       } else {
@@ -604,7 +936,7 @@ const configDB = {
         DO UPDATE SET 
           config_value = $2,
           description = COALESCE($3, system_configs.description),
-          updated_at = CURRENT_TIMESTAMP
+          updated_at = CURRENT_TIMESTAMP + INTERVAL '8 hours'
         RETURNING *
       `;
       const result = await dbAdapter.query(query, [key, configValue, description]);
@@ -618,7 +950,7 @@ const configDB = {
     const result = await dbAdapter.query(query);
     const configs = {};
     result.rows.forEach(row => {
-      configs[row.config_key] = fromJSON(row.config_value);
+      configs[row.config_key] = this._normalizeToCamelCase(fromJSON(row.config_value));
     });
     return configs;
   },
@@ -635,7 +967,7 @@ const configDB = {
           if (existing) {
             db.prepare(`
               UPDATE system_configs 
-              SET config_value = ?, updated_at = datetime('now')
+              SET config_value = ?, updated_at = datetime('now', '+8 hours')
               WHERE config_key = ?
             `).run(configValue, key);
           } else {
@@ -662,7 +994,7 @@ const configDB = {
             ON CONFLICT (config_key) 
             DO UPDATE SET 
               config_value = $2,
-              updated_at = CURRENT_TIMESTAMP
+              updated_at = CURRENT_TIMESTAMP + INTERVAL '8 hours'
           `, [key, JSON.stringify(value)]);
         }
         
@@ -686,12 +1018,16 @@ const storageDB = {
     const query = `SELECT * FROM storage_configs WHERE ${activeCheck} ORDER BY is_default DESC, created_at ASC`;
     const result = await dbAdapter.query(query);
     
-    // 转换 config 字段
+    // 转换为驼峰命名
     return result.rows.map(row => ({
-      ...row,
+      id: row.id,
+      name: row.name,
+      type: row.type,
       config: fromJSON(row.config),
-      is_default: fromBool(row.is_default),
-      is_active: fromBool(row.is_active)
+      isDefault: fromBool(row.is_default),
+      isActive: fromBool(row.is_active),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
     }));
   },
 
@@ -702,11 +1038,16 @@ const storageDB = {
     const result = await dbAdapter.query(query, [id]);
     
     if (result.rows[0]) {
+      const row = result.rows[0];
       return {
-        ...result.rows[0],
-        config: fromJSON(result.rows[0].config),
-        is_default: fromBool(result.rows[0].is_default),
-        is_active: fromBool(result.rows[0].is_active)
+        id: row.id,
+        name: row.name,
+        type: row.type,
+        config: fromJSON(row.config),
+        isDefault: fromBool(row.is_default),
+        isActive: fromBool(row.is_active),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
       };
     }
     return null;
@@ -719,8 +1060,16 @@ const storageDB = {
     const result = await dbAdapter.query(query);
     
     if (result.rows[0]) {
+      const row = result.rows[0];
       return {
-        ...result.rows[0],
+        id: row.id,
+        name: row.name,
+        type: row.type,
+        config: fromJSON(row.config),
+        isDefault: fromBool(row.is_default),
+        isActive: fromBool(row.is_active),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
         config: fromJSON(result.rows[0].config),
         is_default: fromBool(result.rows[0].is_default),
         is_active: fromBool(result.rows[0].is_active)
@@ -742,10 +1091,14 @@ const storageDB = {
       
       const row = db.prepare('SELECT * FROM storage_configs WHERE id = ?').get(info.lastInsertRowid);
       return {
-        ...row,
+        id: row.id,
+        name: row.name,
+        type: row.type,
         config: fromJSON(row.config),
-        is_default: fromBool(row.is_default),
-        is_active: fromBool(row.is_active)
+        isDefault: fromBool(row.is_default),
+        isActive: fromBool(row.is_active),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
       };
     } else {
       const query = `
@@ -754,9 +1107,16 @@ const storageDB = {
         RETURNING *
       `;
       const result = await dbAdapter.query(query, [name, type, configValue]);
+      const row = result.rows[0];
       return {
-        ...result.rows[0],
-        config: fromJSON(result.rows[0].config)
+        id: row.id,
+        name: row.name,
+        type: row.type,
+        config: fromJSON(row.config),
+        isDefault: fromBool(row.is_default),
+        isActive: fromBool(row.is_active),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
       };
     }
   },
@@ -764,7 +1124,7 @@ const storageDB = {
   // 更新存储配置
   async updateStorage(id, name, type, config) {
     const configValue = JSON.stringify(config);
-    const now = DB_TYPE === 'sqlite' ? "datetime('now')" : "CURRENT_TIMESTAMP";
+    const now = DB_TYPE === 'sqlite' ? "datetime('now', '+8 hours')" : "CURRENT_TIMESTAMP + INTERVAL '8 hours'";
     const activeCheck = DB_TYPE === 'sqlite' ? 'is_active = 1' : 'is_active = true';
     
     if (DB_TYPE === 'sqlite') {
@@ -777,23 +1137,35 @@ const storageDB = {
       
       const row = db.prepare('SELECT * FROM storage_configs WHERE id = ?').get(id);
       return row ? {
-        ...row,
+        id: row.id,
+        name: row.name,
+        type: row.type,
         config: fromJSON(row.config),
-        is_default: fromBool(row.is_default),
-        is_active: fromBool(row.is_active)
+        isDefault: fromBool(row.is_default),
+        isActive: fromBool(row.is_active),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
       } : null;
     } else {
       const query = `
         UPDATE storage_configs 
-        SET name = $2, type = $3, config = $4, updated_at = CURRENT_TIMESTAMP
+        SET name = $2, type = $3, config = $4, updated_at = CURRENT_TIMESTAMP + INTERVAL '8 hours'
         WHERE id = $1 AND is_active = true
         RETURNING *
       `;
       const result = await dbAdapter.query(query, [id, name, type, configValue]);
-      return result.rows[0] ? {
-        ...result.rows[0],
-        config: fromJSON(result.rows[0].config)
-      } : null;
+      if (!result.rows[0]) return null;
+      const row = result.rows[0];
+      return {
+        id: row.id,
+        name: row.name,
+        type: row.type,
+        config: fromJSON(row.config),
+        isDefault: fromBool(row.is_default),
+        isActive: fromBool(row.is_active),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+      };
     }
   },
 
@@ -805,14 +1177,14 @@ const storageDB = {
         // 先取消所有默认设置
         db.prepare(`
           UPDATE storage_configs 
-          SET is_default = 0, updated_at = datetime('now')
+          SET is_default = 0, updated_at = datetime('now', '+8 hours')
           WHERE is_default = 1
         `).run();
         
         // 设置新的默认存储
         const info = db.prepare(`
           UPDATE storage_configs 
-          SET is_default = 1, updated_at = datetime('now')
+          SET is_default = 1, updated_at = datetime('now', '+8 hours')
           WHERE id = ? AND is_active = 1
         `).run(id);
         
@@ -824,10 +1196,14 @@ const storageDB = {
       transaction();
       const row = db.prepare('SELECT * FROM storage_configs WHERE id = ?').get(id);
       return {
-        ...row,
+        id: row.id,
+        name: row.name,
+        type: row.type,
         config: fromJSON(row.config),
-        is_default: fromBool(row.is_default),
-        is_active: fromBool(row.is_active)
+        isDefault: fromBool(row.is_default),
+        isActive: fromBool(row.is_active),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
       };
     } else {
       const pool = dbAdapter.getConnection();
@@ -838,14 +1214,14 @@ const storageDB = {
         // 先取消所有默认设置
         await client.query(`
           UPDATE storage_configs 
-          SET is_default = false, updated_at = CURRENT_TIMESTAMP
+          SET is_default = false, updated_at = CURRENT_TIMESTAMP + INTERVAL '8 hours'
           WHERE is_default = true
         `);
         
         // 设置新的默认存储
         const result = await client.query(`
           UPDATE storage_configs 
-          SET is_default = true, updated_at = CURRENT_TIMESTAMP
+          SET is_default = true, updated_at = CURRENT_TIMESTAMP + INTERVAL '8 hours'
           WHERE id = $1 AND is_active = true
           RETURNING *
         `, [id]);
@@ -855,9 +1231,16 @@ const storageDB = {
         }
         
         await client.query('COMMIT');
+        const row = result.rows[0];
         return {
-          ...result.rows[0],
-          config: fromJSON(result.rows[0].config)
+          id: row.id,
+          name: row.name,
+          type: row.type,
+          config: fromJSON(row.config),
+          isDefault: fromBool(row.is_default),
+          isActive: fromBool(row.is_active),
+          createdAt: row.created_at,
+          updatedAt: row.updated_at
         };
       } catch (error) {
         await client.query('ROLLBACK');
@@ -870,7 +1253,7 @@ const storageDB = {
 
   // 删除存储配置（软删除）
   async deleteStorage(id) {
-    const now = DB_TYPE === 'sqlite' ? "datetime('now')" : "CURRENT_TIMESTAMP";
+    const now = DB_TYPE === 'sqlite' ? "datetime('now', '+8 hours')" : "CURRENT_TIMESTAMP + INTERVAL '8 hours'";
     const defaultCheck = DB_TYPE === 'sqlite' ? 'is_default = 0' : 'is_default = false';
     
     if (DB_TYPE === 'sqlite') {
@@ -885,7 +1268,7 @@ const storageDB = {
     } else {
       const query = `
         UPDATE storage_configs 
-        SET is_active = false, updated_at = CURRENT_TIMESTAMP
+        SET is_active = false, updated_at = CURRENT_TIMESTAMP + INTERVAL '8 hours'
         WHERE id = $1 AND is_default = false
         RETURNING *
       `;
@@ -987,7 +1370,7 @@ const apiKeyDB = {
 
   // 更新最后使用时间
   async updateLastUsed(apiKeyId) {
-    const now = DB_TYPE === 'sqlite' ? "datetime('now')" : 'CURRENT_TIMESTAMP';
+    const now = DB_TYPE === 'sqlite' ? "datetime('now', '+8 hours')" : "CURRENT_TIMESTAMP + INTERVAL '8 hours'";
     const query = DB_TYPE === 'sqlite'
       ? `UPDATE api_keys SET last_used_at = ${now} WHERE id = ?`
       : `UPDATE api_keys SET last_used_at = ${now} WHERE id = $1`;
@@ -1012,7 +1395,7 @@ const apiKeyDB = {
       db.prepare(`
         UPDATE api_keys 
         SET is_active = CASE WHEN is_active = 1 THEN 0 ELSE 1 END,
-            updated_at = datetime('now')
+            updated_at = datetime('now', '+8 hours')
         WHERE id = ? AND user_id = ?
       `).run(id, userId);
       
@@ -1028,7 +1411,7 @@ const apiKeyDB = {
     } else {
       const query = `
         UPDATE api_keys 
-        SET is_active = NOT is_active, updated_at = CURRENT_TIMESTAMP
+        SET is_active = NOT is_active, updated_at = CURRENT_TIMESTAMP + INTERVAL '8 hours'
         WHERE id = $1 AND user_id = $2
         RETURNING *
       `;
@@ -1051,7 +1434,7 @@ const apiKeyDB = {
       const db = dbAdapter.getConnection();
       db.prepare(`
         UPDATE api_keys 
-        SET name = ?, permissions = ?, updated_at = datetime('now')
+        SET name = ?, permissions = ?, updated_at = datetime('now', '+8 hours')
         WHERE id = ? AND user_id = ?
       `).run(name, JSON.stringify(permissions), id, userId);
       
@@ -1067,7 +1450,7 @@ const apiKeyDB = {
     } else {
       const query = `
         UPDATE api_keys 
-        SET name = $1, permissions = $2, updated_at = CURRENT_TIMESTAMP
+        SET name = $1, permissions = $2, updated_at = CURRENT_TIMESTAMP + INTERVAL '8 hours'
         WHERE id = $3 AND user_id = $4
         RETURNING *
       `;

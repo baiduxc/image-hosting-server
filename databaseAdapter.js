@@ -62,6 +62,19 @@ class DatabaseAdapter {
     this.db = initDB();
   }
 
+  // 安全地更新数据库连接（用于恢复功能）
+  _setConnection(newDb) {
+    if (this.dbType === 'sqlite' && this.db && this.db.close) {
+      try {
+        this.db.close();
+      } catch (e) {
+        console.log('关闭旧连接:', e.message);
+      }
+    }
+    this.db = newDb;
+    console.log('✅ 数据库连接已更新');
+  }
+
   // 执行查询 (SELECT)
   async query(sql, params = []) {
     if (this.dbType === 'sqlite') {

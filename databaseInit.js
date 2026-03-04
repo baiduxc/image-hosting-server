@@ -23,7 +23,7 @@ const initDatabase = async () => {
 async function initSQLiteDatabase() {
   const db = dbAdapter.getConnection();
   
-  // 创建用户表
+  // 创建用户表（使用北京时间 UTC+8）
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,11 +33,47 @@ async function initSQLiteDatabase() {
       role TEXT DEFAULT 'user',
       avatar_url TEXT,
       is_disabled INTEGER DEFAULT 0,
+      email_verified INTEGER DEFAULT 0,
+      email_verification_token TEXT,
+      email_verification_sent_at TEXT,
       last_login_at TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now', '+8 hours')),
+      updated_at TEXT DEFAULT (datetime('now', '+8 hours'))
     )
   `);
+  
+  // 升级：添加缺失的字段（如果表已存在但缺少这些字段）
+  try {
+    const columns = db.prepare("PRAGMA table_info(users)").all();
+    const columnNames = columns.map(c => c.name);
+    
+    if (!columnNames.includes('email_verified')) {
+      console.log('🔄 升级数据库: 添加 email_verified 字段');
+      db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0');
+    }
+    if (!columnNames.includes('email_verification_token')) {
+      console.log('🔄 升级数据库: 添加 email_verification_token 字段');
+      db.exec('ALTER TABLE users ADD COLUMN email_verification_token TEXT');
+    }
+    if (!columnNames.includes('email_verification_sent_at')) {
+      console.log('🔄 升级数据库: 添加 email_verification_sent_at 字段');
+      db.exec('ALTER TABLE users ADD COLUMN email_verification_sent_at TEXT');
+    }
+    if (!columnNames.includes('last_login_at')) {
+      console.log('🔄 升级数据库: 添加 last_login_at 字段');
+      db.exec('ALTER TABLE users ADD COLUMN last_login_at TEXT');
+    }
+    if (!columnNames.includes('created_at')) {
+      console.log('🔄 升级数据库: 添加 created_at 字段');
+      db.exec('ALTER TABLE users ADD COLUMN created_at TEXT DEFAULT (datetime(\'now\'))');
+    }
+    if (!columnNames.includes('updated_at')) {
+      console.log('🔄 升级数据库: 添加 updated_at 字段');
+      db.exec('ALTER TABLE users ADD COLUMN updated_at TEXT DEFAULT (datetime(\'now\'))');
+    }
+  } catch (error) {
+    console.error('数据库升级失败:', error);
+  }
 
   // 创建图片表
   db.exec(`
@@ -176,7 +212,7 @@ async function initSQLiteDatabase() {
 async function initPostgresDatabase() {
   const pool = dbAdapter.getConnection();
   
-  // 创建用户表
+  // 创建用户表（使用北京时间 UTC+8）
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
@@ -186,11 +222,51 @@ async function initPostgresDatabase() {
       role VARCHAR(20) DEFAULT 'user',
       avatar_url VARCHAR(500),
       is_disabled BOOLEAN DEFAULT FALSE,
+      email_verified BOOLEAN DEFAULT FALSE,
+      email_verification_token VARCHAR(255),
+      email_verification_sent_at TIMESTAMP WITH TIME ZONE,
       last_login_at TIMESTAMP WITH TIME ZONE,
-      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT (CURRENT_TIMESTAMP + INTERVAL '8 hours'),
+      updated_at TIMESTAMP WITH TIME ZONE DEFAULT (CURRENT_TIMESTAMP + INTERVAL '8 hours')
     )
   `);
+  
+  // 升级：添加缺失的字段（如果表已存在但缺少这些字段）
+  try {
+    const columnCheck = await pool.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'users'
+    `);
+    const columns = columnCheck.rows.map(r => r.column_name);
+    
+    if (!columns.includes('email_verified')) {
+      console.log('🔄 升级数据库: 添加 email_verified 字段');
+      await pool.query('ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT FALSE');
+    }
+    if (!columns.includes('email_verification_token')) {
+      console.log('🔄 升级数据库: 添加 email_verification_token 字段');
+      await pool.query('ALTER TABLE users ADD COLUMN email_verification_token VARCHAR(255)');
+    }
+    if (!columns.includes('email_verification_sent_at')) {
+      console.log('🔄 升级数据库: 添加 email_verification_sent_at 字段');
+      await pool.query('ALTER TABLE users ADD COLUMN email_verification_sent_at TIMESTAMP WITH TIME ZONE');
+    }
+    if (!columns.includes('last_login_at')) {
+      console.log('🔄 升级数据库: 添加 last_login_at 字段');
+      await pool.query('ALTER TABLE users ADD COLUMN last_login_at TIMESTAMP WITH TIME ZONE');
+    }
+    if (!columns.includes('created_at')) {
+      console.log('🔄 升级数据库: 添加 created_at 字段');
+      await pool.query('ALTER TABLE users ADD COLUMN created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP');
+    }
+    if (!columns.includes('updated_at')) {
+      console.log('🔄 升级数据库: 添加 updated_at 字段');
+      await pool.query('ALTER TABLE users ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP');
+    }
+  } catch (error) {
+    console.error('数据库升级失败:', error);
+  }
 
   // 创建图片表
   await pool.query(`
