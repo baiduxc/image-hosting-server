@@ -29,7 +29,7 @@ const upload = multer({
 // ==================== API 密钥管理接口 ====================
 
 // 获取用户的所有 API 密钥
-router.get('/keys', authenticate, async (req, res) => {
+router.get('/', authenticate, async (req, res) => {
   try {
     const keys = await apiKeyDB.getApiKeysByUserId(req.user.id);
     
@@ -53,7 +53,7 @@ router.get('/keys', authenticate, async (req, res) => {
 });
 
 // 创建新的 API 密钥
-router.post('/keys', authenticate, async (req, res) => {
+router.post('/', authenticate, async (req, res) => {
   try {
     const { name, permissions = ['upload', 'view'], expiresAt } = req.body;
     
@@ -97,7 +97,7 @@ router.post('/keys', authenticate, async (req, res) => {
 });
 
 // 更新 API 密钥
-router.put('/keys/:id', authenticate, async (req, res) => {
+router.put('/:id', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, permissions } = req.body;
@@ -142,7 +142,7 @@ router.put('/keys/:id', authenticate, async (req, res) => {
 });
 
 // 切换 API 密钥状态
-router.patch('/keys/:id/toggle', authenticate, async (req, res) => {
+router.patch('/:id/toggle', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
     
@@ -173,7 +173,7 @@ router.patch('/keys/:id/toggle', authenticate, async (req, res) => {
 });
 
 // 删除 API 密钥
-router.delete('/keys/:id', authenticate, async (req, res) => {
+router.delete('/:id', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
     

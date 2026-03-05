@@ -1360,6 +1360,7 @@ const apiKeyDB = {
       const row = result.rows[0];
       return {
         ...row,
+        user_id: row.user_id || row.owner_id, // 确保 user_id 存在
         permissions: fromJSON(row.permissions),
         is_active: fromBool(row.is_active),
         is_disabled: fromBool(row.is_disabled)
@@ -1380,12 +1381,15 @@ const apiKeyDB = {
 
   // 删除 API 密钥
   async deleteApiKey(id, userId) {
-    const query = DB_TYPE === 'sqlite'
-      ? 'DELETE FROM api_keys WHERE id = ? AND user_id = ?'
-      : 'DELETE FROM api_keys WHERE id = $1 AND user_id = $2';
-    
-    const result = await dbAdapter.query(query, [id, userId]);
-    return DB_TYPE === 'sqlite' ? result.changes > 0 : result.rowCount > 0;
+    if (DB_TYPE === 'sqlite') {
+      const db = dbAdapter.getConnection();
+      const result = db.prepare('DELETE FROM api_keys WHERE id = ? AND user_id = ?').run(id, userId);
+      return result.changes > 0;
+    } else {
+      const query = 'DELETE FROM api_keys WHERE id = $1 AND user_id = $2';
+      const result = await dbAdapter.query(query, [id, userId]);
+      return result.rowCount > 0;
+    }
   },
 
   // 切换 API 密钥状态

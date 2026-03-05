@@ -180,6 +180,13 @@ const authenticateApiKey = async (req, res, next) => {
     // 验证 API 密钥
     const keyInfo = await apiKeyDB.getByApiKey(apiKey);
     
+    // 调试日志（仅在开发环境）
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[API Key Auth] Query params:', req.query);
+      console.log('[API Key Auth] Key provided:', apiKey.substring(0, 10) + '...');
+      console.log('[API Key Auth] KeyInfo found:', !!keyInfo);
+    }
+    
     if (!keyInfo) {
       return res.status(401).json({
         success: false,
