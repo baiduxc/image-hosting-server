@@ -3,10 +3,142 @@ const multer = require('multer');
 const path = require('path');
 const crypto = require('crypto');
 const { imageDB, apiKeyDB, storageDB } = require('../database');
+const { dbAdapter, DB_TYPE } = require('../databaseAdapter');
+
+// 获取用户组信息
+async function getUserGroupInfo(userId) {
+  try {
+    const userQuery = `SELECT group_id FROM users WHERE id = ${DB_TYPE === 'sqlite' ? '?' : '$1'}`;
+    const userResult = await dbAdapter.query(userQuery, [userId]);
+    const groupId = userResult.rows[0]?.group_id;
+
+    let group;
+    if (groupId) {
+      const groupQuery = `SELECT * FROM user_groups WHERE id = ${DB_TYPE === 'sqlite' ? '?' : '$1'}`;
+      const groupResult = await dbAdapter.query(groupQuery, [groupId]);
+      group = groupResult.rows[0];
+    }
+
+    if (!group) {
+      const defaultGroupQuery = `SELECT * FROM user_groups WHERE is_default = ${DB_TYPE === 'sqlite' ? '1' : 'true'} LIMIT 1`;
+      const defaultGroupResult = await dbAdapter.query(defaultGroupQuery);
+      group = defaultGroupResult.rows[0];
+    }
+
+    return group;
+  } catch (error) {
+    console.error('获取用户组信息失败:', error);
+    return null;
+  }
+}
 const { authenticate, authenticateApiKey, requireApiPermission } = require('../middleware/auth');
 const { uploadToStorage, deleteFromStorage } = require('../services/storageService');
 
 const router = express.Router();
+
+// 检查用户上传限制
+async function checkUploadLimit(userId, fileCount, fileSize) {
+  const group = await getUserGroupInfo(userId);
+  if (!group) {
+    return { allowed: true }; // 如果无法获取组信息，允许上传
+  }
+
+  const limits = {
+    daily: parseInt(group.daily_upload_limit) || 0,
+    weekly: parseInt(group.weekly_upload_limit) || 0,
+    monthly: parseInt(group.monthly_upload_limit) || 0,
+    maxFileSize: parseInt(group.max_file_size) || 10,
+    concurrent: parseInt(group.concurrent_uploads) || 3
+  };
+
+  // 检查单文件大小限制
+  if (fileSize > limits.maxFileSize * 1024 * 1024) {
+    return {
+      allowed: false,
+      message: `单文件大小超过限制（最大 ${limits.maxFileSize}MB）`
+    };
+  }
+
+  // 检查批量上传数量
+  if (fileCount > limits.concurrent) {
+    return {
+      allowed: false,
+      message: `批量上传数量超过限制（最大 ${limits.concurrent} 个）`
+    };
+  }
+
+  // 获取今日上传数量
+  let todayCount = 0;
+  if (DB_TYPE === 'sqlite') {
+    const result = await dbAdapter.query(
+      `SELECT COUNT(*) as count FROM images WHERE user_id = ? AND date(created_at) = date('now', '+8 hours')`,
+      [userId]
+    );
+    todayCount = parseInt(result.rows[0].count);
+  } else {
+    const result = await dbAdapter.query(
+      `SELECT COUNT(*) as count FROM images WHERE user_id = $1 AND DATE(created_at) = CURRENT_DATE`,
+      [userId]
+    );
+    todayCount = parseInt(result.rows[0].count);
+  }
+
+  // 检查日限制
+  if (limits.daily > 0 && todayCount + fileCount > limits.daily) {
+    return {
+      allowed: false,
+      message: `今日上传数量已达上限（${limits.daily} 张）`
+    };
+  }
+
+  // 检查周限制
+  let weekCount = 0;
+  if (DB_TYPE === 'sqlite') {
+    const result = await dbAdapter.query(
+      `SELECT COUNT(*) as count FROM images WHERE user_id = ? AND date(created_at) >= date('now', '-7 days', '+8 hours')`,
+      [userId]
+    );
+    weekCount = parseInt(result.rows[0].count);
+  } else {
+    const result = await dbAdapter.query(
+      `SELECT COUNT(*) as count FROM images WHERE user_id = $1 AND created_at >= DATE_TRUNC('week', CURRENT_DATE)`,
+      [userId]
+    );
+    weekCount = parseInt(result.rows[0].count);
+  }
+
+  if (limits.weekly > 0 && weekCount + fileCount > limits.weekly) {
+    return {
+      allowed: false,
+      message: `本周上传数量已达上限（${limits.weekly} 张）`
+    };
+  }
+
+  // 检查月限制
+  let monthCount = 0;
+  if (DB_TYPE === 'sqlite') {
+    const result = await dbAdapter.query(
+      `SELECT COUNT(*) as count FROM images WHERE user_id = ? AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', '+8 hours')`,
+      [userId]
+    );
+    monthCount = parseInt(result.rows[0].count);
+  } else {
+    const result = await dbAdapter.query(
+      `SELECT COUNT(*) as count FROM images WHERE user_id = $1 AND created_at >= DATE_TRUNC('month', CURRENT_DATE)`,
+      [userId]
+    );
+    monthCount = parseInt(result.rows[0].count);
+  }
+
+  if (limits.monthly > 0 && monthCount + fileCount > limits.monthly) {
+    return {
+      allowed: false,
+      message: `本月上传数量已达上限（${limits.monthly} 张）`
+    };
+  }
+
+  return { allowed: true };
+}
 
 // 配置 multer 用于文件上传
 const storage = multer.memoryStorage();
@@ -211,6 +343,17 @@ router.post('/upload', authenticateApiKey, requireApiPermission('upload'), uploa
         success: false,
         code: 'NO_FILES',
         message: '请上传至少一个图片文件'
+      });
+    }
+
+    // 检查上传限制
+    const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+    const limitCheck = await checkUploadLimit(req.user.id, files.length, totalSize / files.length);
+    if (!limitCheck.allowed) {
+      return res.status(403).json({
+        success: false,
+        code: 'LIMIT_EXCEEDED',
+        message: limitCheck.message
       });
     }
 

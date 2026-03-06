@@ -490,7 +490,7 @@ router.get('/users/stats', authenticate, requireAdmin, async (req, res) => {
 router.put('/users/:id', authenticate, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { email, role, isDisabled } = req.body;
+    const { email, role, groupId, groupExpiresAt, isDisabled } = req.body;
     
     // 不能修改自己的角色为普通用户（防止失去管理员权限）
     if (parseInt(id) === req.user.id && role === 'user') {
@@ -503,6 +503,8 @@ router.put('/users/:id', authenticate, requireAdmin, async (req, res) => {
     const updateData = {};
     if (email !== undefined) updateData.email = email;
     if (role !== undefined) updateData.role = role;
+    if (groupId !== undefined) updateData.group_id = groupId;
+    if (groupExpiresAt !== undefined) updateData.group_expires_at = groupExpiresAt;
     if (isDisabled !== undefined) updateData.isDisabled = isDisabled;
     
     const result = await userDB.update(parseInt(id), updateData);

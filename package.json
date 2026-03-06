@@ -1,7 +1,7 @@
 {
-  "name": "image-hosting-api",
+  "name": "server",
   "version": "1.0.0",
-  "description": "图床管理系统 API 服务",
+  "description": "",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",

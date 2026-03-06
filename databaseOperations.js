@@ -595,13 +595,15 @@ const userDB = {
     const countResult = await dbAdapter.query(countQuery, queryParams);
     const total = parseInt(countResult.rows[0].count);
     
-    // 查询用户数据
+    // 查询用户数据（关联用户组）
     const dataQuery = `
-      SELECT id, username, email, role, avatar_url, is_disabled, 
-             email_verified, last_login_at, created_at, updated_at
-      FROM users 
+      SELECT u.id, u.username, u.email, u.role, u.avatar_url, u.is_disabled, 
+             u.email_verified, u.last_login_at, u.created_at, u.updated_at,
+             u.group_id, u.group_expires_at, g.name as group_name
+      FROM users u
+      LEFT JOIN user_groups g ON u.group_id = g.id
       ${whereClause}
-      ORDER BY created_at DESC
+      ORDER BY u.created_at DESC
       LIMIT ${DB_TYPE === 'sqlite' ? '?' : `$${paramIndex}`} OFFSET ${DB_TYPE === 'sqlite' ? '?' : `$${paramIndex + 1}`}
     `;
     queryParams.push(limit, offset);
@@ -618,6 +620,9 @@ const userDB = {
           email: user.email,
           role: user.role,
           avatarUrl: user.avatar_url,
+          groupId: user.group_id,
+          groupName: user.group_name,
+          groupExpiresAt: user.group_expires_at,
           imageCount,
           isDisabled: DB_TYPE === 'sqlite' ? user.is_disabled === 1 : user.is_disabled,
           emailVerified: DB_TYPE === 'sqlite' ? user.email_verified === 1 : user.email_verified,
@@ -676,7 +681,7 @@ const userDB = {
 
   // 更新用户信息（管理员）
   async update(id, updateData) {
-    const { email, role, isDisabled } = updateData;
+    const { email, role, group_id, group_expires_at, isDisabled, password_hash } = updateData;
     const now = DB_TYPE === 'sqlite' ? "datetime('now', '+8 hours')" : "CURRENT_TIMESTAMP + INTERVAL '8 hours'";
     
     const fields = [];
@@ -695,9 +700,27 @@ const userDB = {
       paramIndex++;
     }
     
+    if (group_id !== undefined) {
+      fields.push(`group_id = ${DB_TYPE === 'sqlite' ? '?' : `$${paramIndex}`}`);
+      values.push(group_id);
+      paramIndex++;
+    }
+    
+    if (group_expires_at !== undefined) {
+      fields.push(`group_expires_at = ${DB_TYPE === 'sqlite' ? '?' : `$${paramIndex}`}`);
+      values.push(group_expires_at);
+      paramIndex++;
+    }
+    
     if (isDisabled !== undefined) {
       fields.push(`is_disabled = ${DB_TYPE === 'sqlite' ? '?' : `$${paramIndex}`}`);
       values.push(DB_TYPE === 'sqlite' ? (isDisabled ? 1 : 0) : isDisabled);
+      paramIndex++;
+    }
+    
+    if (password_hash !== undefined) {
+      fields.push(`password_hash = ${DB_TYPE === 'sqlite' ? '?' : `$${paramIndex}`}`);
+      values.push(password_hash);
       paramIndex++;
     }
     

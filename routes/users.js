@@ -1,8 +1,108 @@
 const express = require('express');
-const { userDB, imageDB, statsDB } = require('../database');
+const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+const nodemailer = require('nodemailer');
+const { userDB, imageDB, statsDB, configDB } = require('../database');
 const { authenticate, requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
+
+// 内存存储验证码（生产环境建议使用 Redis）
+const verificationCodes = new Map();
+const CODE_EXPIRY_MINUTES = 10;
+
+// 生成6位数字验证码
+function generateVerificationCode() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+// 存储验证码
+function storeVerificationCode(key, code, data = {}) {
+  const expiryTime = Date.now() + CODE_EXPIRY_MINUTES * 60 * 1000;
+  verificationCodes.set(key, {
+    code,
+    expiryTime,
+    ...data
+  });
+}
+
+// 验证验证码
+function verifyCode(key, code) {
+  const stored = verificationCodes.get(key);
+  if (!stored) {
+    return { valid: false, message: '验证码不存在或已过期' };
+  }
+  if (Date.now() > stored.expiryTime) {
+    verificationCodes.delete(key);
+    return { valid: false, message: '验证码已过期' };
+  }
+  if (stored.code !== code) {
+    return { valid: false, message: '验证码错误' };
+  }
+  return { valid: true, data: stored };
+}
+
+// 获取邮件配置
+async function getEmailConfig() {
+  const config = await configDB.getConfig('email');
+  return config || {};
+}
+
+// 发送验证码邮件
+async function sendVerificationCodeEmail(email, code, purpose) {
+  const emailConfig = await getEmailConfig();
+  
+  if (!emailConfig.smtpHost || !emailConfig.smtpUser || !emailConfig.smtpPass) {
+    console.error('邮件配置不完整，无法发送验证码邮件');
+    return false;
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: emailConfig.smtpHost,
+    port: parseInt(emailConfig.smtpPort) || 587,
+    secure: emailConfig.smtpSecure === true || parseInt(emailConfig.smtpPort) === 465,
+    auth: {
+      user: emailConfig.smtpUser,
+      pass: emailConfig.smtpPass
+    },
+    tls: {
+      rejectUnauthorized: false
+    }
+  });
+
+  const purposeText = {
+    'password_change': '修改密码',
+    'email_change': '修改邮箱',
+    'new_email': '验证新邮箱'
+  }[purpose] || '安全验证';
+
+  const mailOptions = {
+    from: `"${emailConfig.fromName || '图床系统'}" <${emailConfig.fromEmail || emailConfig.smtpUser}>`,
+    to: email,
+    subject: `${purposeText} - 验证码`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2 style="color: #0052d9;">安全验证码</h2>
+        <p>您好，</p>
+        <p>您正在进行<strong>${purposeText}</strong>操作，请输入以下验证码完成验证：</p>
+        <div style="text-align: center; margin: 30px 0; padding: 20px; background: #f5f5f5; border-radius: 8px;">
+          <span style="font-size: 32px; font-weight: bold; color: #0052d9; letter-spacing: 8px;">${code}</span>
+        </div>
+        <p style="color: #999; font-size: 14px;">
+          此验证码将在 <strong>${CODE_EXPIRY_MINUTES} 分钟</strong>后失效。如非您本人操作，请忽略此邮件。
+        </p>
+      </div>
+    `
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    return true;
+  } catch (error) {
+    console.error('发送验证码邮件失败:', error);
+    return false;
+  }
+}
 
 // 获取用户统计信息
 router.get('/stats', authenticate, async (req, res) => {
@@ -193,7 +293,7 @@ router.put('/profile', authenticate, async (req, res) => {
   }
 });
 
-// 修改密码
+// 修改密码（原接口，保留兼容）
 router.post('/change-password', authenticate, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -230,6 +330,453 @@ router.post('/change-password', authenticate, async (req, res) => {
     res.status(500).json({
       success: false,
       message: '修改密码失败',
+      error: error.message
+    });
+  }
+});
+
+// ============ 安全修改密码（带验证码）============
+
+// 发送密码修改验证码
+router.post('/send-password-code', authenticate, async (req, res) => {
+  try {
+    const { currentPassword } = req.body;
+    const userId = req.user.id;
+
+    if (!currentPassword) {
+      return res.status(400).json({
+        success: false,
+        message: '请提供当前密码'
+      });
+    }
+
+    // 验证当前密码
+    const user = await userDB.getById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: '用户不存在'
+      });
+    }
+
+    const isPasswordValid = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!isPasswordValid) {
+      return res.status(400).json({
+        success: false,
+        message: '当前密码错误'
+      });
+    }
+
+    // 检查邮箱是否存在
+    if (!user.email) {
+      return res.status(400).json({
+        success: false,
+        message: '用户未绑定邮箱，无法发送验证码'
+      });
+    }
+
+    // 生成验证码
+    const code = generateVerificationCode();
+    const key = `password:${userId}`;
+    
+    // 存储验证码
+    storeVerificationCode(key, code, { userId });
+
+    // 发送验证码邮件
+    const emailSent = await sendVerificationCodeEmail(user.email, code, 'password_change');
+
+    if (emailSent) {
+      res.json({
+        success: true,
+        message: '验证码已发送到您的邮箱'
+      });
+    } else {
+      // 删除已存储的验证码
+      verificationCodes.delete(key);
+      res.status(500).json({
+        success: false,
+        message: '验证码邮件发送失败，请检查邮件配置'
+      });
+    }
+  } catch (error) {
+    console.error('发送密码修改验证码失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '发送验证码失败',
+      error: error.message
+    });
+  }
+});
+
+// 验证密码修改验证码
+router.post('/verify-password-code', authenticate, async (req, res) => {
+  try {
+    const { code } = req.body;
+    const userId = req.user.id;
+
+    if (!code) {
+      return res.status(400).json({
+        success: false,
+        message: '请提供验证码'
+      });
+    }
+
+    const key = `password:${userId}`;
+    const result = verifyCode(key, code);
+
+    if (!result.valid) {
+      return res.status(400).json({
+        success: false,
+        message: result.message
+      });
+    }
+
+    res.json({
+      success: true,
+      message: '验证成功'
+    });
+  } catch (error) {
+    console.error('验证密码修改验证码失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '验证失败',
+      error: error.message
+    });
+  }
+});
+
+// 使用验证码修改密码
+router.post('/change-password-with-code', authenticate, async (req, res) => {
+  try {
+    const { code, newPassword } = req.body;
+    const userId = req.user.id;
+
+    if (!code || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: '请提供验证码和新密码'
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: '新密码长度至少6位'
+      });
+    }
+
+    // 验证验证码
+    const key = `password:${userId}`;
+    const result = verifyCode(key, code);
+
+    if (!result.valid) {
+      return res.status(400).json({
+        success: false,
+        message: result.message
+      });
+    }
+
+    // 更新密码
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await userDB.update(userId, { password_hash: passwordHash });
+
+    // 删除已使用的验证码
+    verificationCodes.delete(key);
+
+    res.json({
+      success: true,
+      message: '密码修改成功'
+    });
+  } catch (error) {
+    console.error('使用验证码修改密码失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '密码修改失败',
+      error: error.message
+    });
+  }
+});
+
+// ============ 安全修改邮箱（带验证码）============
+
+// 验证当前密码
+router.post('/verify-password', authenticate, async (req, res) => {
+  try {
+    const { currentPassword } = req.body;
+    const userId = req.user.id;
+
+    if (!currentPassword) {
+      return res.status(400).json({
+        success: false,
+        message: '请提供当前密码'
+      });
+    }
+
+    const user = await userDB.getById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: '用户不存在'
+      });
+    }
+
+    const isPasswordValid = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!isPasswordValid) {
+      return res.status(400).json({
+        success: false,
+        message: '当前密码错误'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: '密码验证成功'
+    });
+  } catch (error) {
+    console.error('验证密码失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '验证失败',
+      error: error.message
+    });
+  }
+});
+
+// 发送当前邮箱验证码
+router.post('/send-email-code', authenticate, async (req, res) => {
+  try {
+    const { currentPassword } = req.body;
+    const userId = req.user.id;
+
+    // 验证当前密码
+    const user = await userDB.getById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: '用户不存在'
+      });
+    }
+
+    const isPasswordValid = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!isPasswordValid) {
+      return res.status(400).json({
+        success: false,
+        message: '当前密码错误'
+      });
+    }
+
+    // 检查邮箱是否存在
+    if (!user.email) {
+      return res.status(400).json({
+        success: false,
+        message: '用户未绑定邮箱'
+      });
+    }
+
+    // 生成验证码
+    const code = generateVerificationCode();
+    const key = `email:${userId}`;
+    
+    // 存储验证码
+    storeVerificationCode(key, code, { userId });
+
+    // 发送验证码邮件
+    const emailSent = await sendVerificationCodeEmail(user.email, code, 'email_change');
+
+    if (emailSent) {
+      res.json({
+        success: true,
+        message: '验证码已发送到当前邮箱'
+      });
+    } else {
+      verificationCodes.delete(key);
+      res.status(500).json({
+        success: false,
+        message: '验证码邮件发送失败，请检查邮件配置'
+      });
+    }
+  } catch (error) {
+    console.error('发送邮箱验证码失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '发送验证码失败',
+      error: error.message
+    });
+  }
+});
+
+// 验证当前邮箱验证码
+router.post('/verify-email-code', authenticate, async (req, res) => {
+  try {
+    const { code } = req.body;
+    const userId = req.user.id;
+
+    if (!code) {
+      return res.status(400).json({
+        success: false,
+        message: '请提供验证码'
+      });
+    }
+
+    const key = `email:${userId}`;
+    const result = verifyCode(key, code);
+
+    if (!result.valid) {
+      return res.status(400).json({
+        success: false,
+        message: result.message
+      });
+    }
+
+    res.json({
+      success: true,
+      message: '验证成功'
+    });
+  } catch (error) {
+    console.error('验证邮箱验证码失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '验证失败',
+      error: error.message
+    });
+  }
+});
+
+// 发送新邮箱验证码
+router.post('/send-new-email-code', authenticate, async (req, res) => {
+  try {
+    const { newEmail } = req.body;
+    const userId = req.user.id;
+
+    if (!newEmail) {
+      return res.status(400).json({
+        success: false,
+        message: '请提供新邮箱地址'
+      });
+    }
+
+    // 验证邮箱格式
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(newEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: '邮箱格式不正确'
+      });
+    }
+
+    // 检查新邮箱是否已被使用
+    const existingUser = await userDB.getByEmail(newEmail);
+    if (existingUser && existingUser.id !== userId) {
+      return res.status(400).json({
+        success: false,
+        message: '该邮箱已被其他用户使用'
+      });
+    }
+
+    // 生成验证码
+    const code = generateVerificationCode();
+    const key = `new_email:${userId}`;
+    
+    // 存储验证码
+    storeVerificationCode(key, code, { userId, newEmail });
+
+    // 发送验证码邮件到新邮箱
+    const emailSent = await sendVerificationCodeEmail(newEmail, code, 'new_email');
+
+    if (emailSent) {
+      res.json({
+        success: true,
+        message: '验证码已发送到新邮箱'
+      });
+    } else {
+      verificationCodes.delete(key);
+      res.status(500).json({
+        success: false,
+        message: '验证码邮件发送失败，请检查邮件配置'
+      });
+    }
+  } catch (error) {
+    console.error('发送新邮箱验证码失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '发送验证码失败',
+      error: error.message
+    });
+  }
+});
+
+// 修改邮箱
+router.post('/change-email', authenticate, async (req, res) => {
+  try {
+    const { oldCode, newEmail, newCode } = req.body;
+    const userId = req.user.id;
+
+    if (!oldCode || !newEmail || !newCode) {
+      return res.status(400).json({
+        success: false,
+        message: '请提供所有必需的参数'
+      });
+    }
+
+    // 验证原邮箱验证码
+    const oldKey = `email:${userId}`;
+    const oldResult = verifyCode(oldKey, oldCode);
+
+    if (!oldResult.valid) {
+      return res.status(400).json({
+        success: false,
+        message: '原邮箱验证码' + oldResult.message
+      });
+    }
+
+    // 验证新邮箱验证码
+    const newKey = `new_email:${userId}`;
+    const newResult = verifyCode(newKey, newCode);
+
+    if (!newResult.valid) {
+      return res.status(400).json({
+        success: false,
+        message: '新邮箱验证码' + newResult.message
+      });
+    }
+
+    // 验证新邮箱是否匹配
+    if (newResult.data.newEmail !== newEmail) {
+      return res.status(400).json({
+        success: false,
+        message: '新邮箱与验证时不一致'
+      });
+    }
+
+    // 检查新邮箱是否已被使用
+    const existingUser = await userDB.getByEmail(newEmail);
+    if (existingUser && existingUser.id !== userId) {
+      return res.status(400).json({
+        success: false,
+        message: '该邮箱已被其他用户使用'
+      });
+    }
+
+    // 更新邮箱
+    const updatedUser = await userDB.update(userId, { email: newEmail });
+
+    // 删除已使用的验证码
+    verificationCodes.delete(oldKey);
+    verificationCodes.delete(newKey);
+
+    // 移除敏感信息
+    const { password_hash, ...userProfile } = updatedUser;
+
+    res.json({
+      success: true,
+      message: '邮箱修改成功',
+      data: userProfile
+    });
+  } catch (error) {
+    console.error('修改邮箱失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '邮箱修改失败',
       error: error.message
     });
   }

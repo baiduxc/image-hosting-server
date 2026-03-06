@@ -168,6 +168,118 @@ async function initSQLiteDatabase() {
     CREATE INDEX IF NOT EXISTS idx_api_keys_api_key ON api_keys(api_key);
   `);
 
+  // 创建用户组表
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT UNIQUE NOT NULL,
+      description TEXT,
+      daily_upload_limit INTEGER DEFAULT 50,
+      weekly_upload_limit INTEGER DEFAULT 300,
+      monthly_upload_limit INTEGER DEFAULT 1000,
+      max_file_size INTEGER DEFAULT 10,
+      concurrent_uploads INTEGER DEFAULT 3,
+      storage_space INTEGER DEFAULT 100,
+      is_default INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now', '+8 hours')),
+      updated_at TEXT DEFAULT (datetime('now', '+8 hours'))
+    )
+  `);
+
+  // 升级：添加 storage_space 字段到 user_groups 表（如果不存在）
+  try {
+    const groupColumns = db.prepare("PRAGMA table_info(user_groups)").all();
+    const groupColumnNames = groupColumns.map(c => c.name);
+    
+    if (!groupColumnNames.includes('storage_space')) {
+      console.log('🔄 升级数据库: 添加 storage_space 字段到 user_groups 表');
+      db.exec('ALTER TABLE user_groups ADD COLUMN storage_space INTEGER DEFAULT 100');
+      // 更新现有行的 storage_space 为默认值
+      db.exec("UPDATE user_groups SET storage_space = 100 WHERE storage_space IS NULL");
+      console.log('✅ storage_space 字段添加成功');
+    }
+  } catch (error) {
+    console.error('添加 storage_space 字段失败:', error);
+  }
+
+  // 创建用户组升级密钥表
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_group_keys (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+      key TEXT UNIQUE NOT NULL,
+      is_used INTEGER DEFAULT 0,
+      used_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      used_at TEXT,
+      expires_at TEXT,
+      created_at TEXT DEFAULT (datetime('now', '+8 hours'))
+    )
+  `);
+
+  // 添加 group_id 字段到 users 表（如果不存在）
+  try {
+    const userColumns = db.prepare("PRAGMA table_info(users)").all();
+    const userColumnNames = userColumns.map(c => c.name);
+    
+    if (!userColumnNames.includes('group_id')) {
+      console.log('🔄 升级数据库: 添加 group_id 字段到 users 表');
+      db.exec('ALTER TABLE users ADD COLUMN group_id INTEGER REFERENCES user_groups(id) ON DELETE SET NULL');
+    }
+    if (!userColumnNames.includes('group_expires_at')) {
+      console.log('🔄 升级数据库: 添加 group_expires_at 字段到 users 表');
+      db.exec('ALTER TABLE users ADD COLUMN group_expires_at TEXT');
+    }
+  } catch (error) {
+    console.error('添加用户组字段失败:', error);
+  }
+
+  // 创建索引
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_user_groups_is_default ON user_groups(is_default);
+    CREATE INDEX IF NOT EXISTS idx_user_group_keys_key ON user_group_keys(key);
+    CREATE INDEX IF NOT EXISTS idx_user_group_keys_is_used ON user_group_keys(is_used);
+    CREATE INDEX IF NOT EXISTS idx_users_group_id ON users(group_id);
+  `);
+
+  // 创建默认用户组（按名称检查，避免唯一约束错误）
+  const normalGroupExists = db.prepare('SELECT id FROM user_groups WHERE name = ? LIMIT 1').get('普通用户');
+  if (!normalGroupExists) {
+    db.prepare(`
+      INSERT INTO user_groups (name, description, daily_upload_limit, weekly_upload_limit, 
+        monthly_upload_limit, max_file_size, concurrent_uploads, storage_space, is_default)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run('普通用户', '默认用户组，基础上传权限', 50, 300, 1000, 10, 3, 100, 1);
+    console.log('✅ 默认用户组已创建');
+  } else {
+    // 如果没有默认组，将普通用户设为默认
+    const defaultGroup = db.prepare('SELECT id FROM user_groups WHERE is_default = 1 LIMIT 1').get();
+    if (!defaultGroup) {
+      db.prepare('UPDATE user_groups SET is_default = 1 WHERE name = ?').run('普通用户');
+      console.log('🔄 已将普通用户设为默认组');
+    }
+  }
+
+  // 创建VIP用户组（如果不存在）
+  const vipGroupExists = db.prepare('SELECT id FROM user_groups WHERE name = ? LIMIT 1').get('VIP用户');
+  if (!vipGroupExists) {
+    db.prepare(`
+      INSERT INTO user_groups (name, description, daily_upload_limit, weekly_upload_limit, 
+        monthly_upload_limit, max_file_size, concurrent_uploads, storage_space, is_default)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run('VIP用户', '高级用户组，更大上传配额', 200, 1500, 5000, 50, 10, 500, 0);
+    console.log('✅ VIP用户组已创建');
+  }
+
+  // 将没有用户组的用户设置为默认用户组
+  const defaultGroup = db.prepare('SELECT id FROM user_groups WHERE is_default = 1 LIMIT 1').get();
+  if (defaultGroup) {
+    const usersWithoutGroup = db.prepare('SELECT COUNT(*) as count FROM users WHERE group_id IS NULL').get();
+    if (usersWithoutGroup.count > 0) {
+      db.prepare('UPDATE users SET group_id = ? WHERE group_id IS NULL').run(defaultGroup.id);
+      console.log(`🔄 已将 ${usersWithoutGroup.count} 位用户设置为默认用户组`);
+    }
+  }
+
   // 创建默认管理员账户
   const adminExists = db.prepare('SELECT id FROM users WHERE username = ? LIMIT 1').get('admin');
   
@@ -175,10 +287,14 @@ async function initSQLiteDatabase() {
     const defaultPassword = 'admin123';
     const hashedPassword = await bcrypt.hash(defaultPassword, 10);
     
+    // 获取默认用户组ID
+    const defaultGroup = db.prepare('SELECT id FROM user_groups WHERE is_default = 1 LIMIT 1').get();
+    const defaultGroupId = defaultGroup ? defaultGroup.id : null;
+    
     db.prepare(`
-      INSERT INTO users (username, email, password_hash, role)
-      VALUES (?, ?, ?, ?)
-    `).run('admin', 'admin@example.com', hashedPassword, 'admin');
+      INSERT INTO users (username, email, password_hash, role, group_id)
+      VALUES (?, ?, ?, ?, ?)
+    `).run('admin', 'admin@example.com', hashedPassword, 'admin', defaultGroupId);
     
     console.log('✅ 默认管理员账户已创建 (用户名: admin, 密码: admin123)');
   }
@@ -390,6 +506,150 @@ async function initPostgresDatabase() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_api_keys_api_key ON api_keys(api_key)`);
 
+  // 创建用户组表
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_groups (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(50) UNIQUE NOT NULL,
+      description TEXT,
+      daily_upload_limit INTEGER DEFAULT 50,
+      weekly_upload_limit INTEGER DEFAULT 300,
+      monthly_upload_limit INTEGER DEFAULT 1000,
+      max_file_size INTEGER DEFAULT 10,
+      concurrent_uploads INTEGER DEFAULT 3,
+      storage_space INTEGER DEFAULT 100,
+      is_default BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT (CURRENT_TIMESTAMP + INTERVAL '8 hours'),
+      updated_at TIMESTAMP WITH TIME ZONE DEFAULT (CURRENT_TIMESTAMP + INTERVAL '8 hours')
+    )
+  `);
+
+  // 升级：添加 storage_space 字段到 user_groups 表（如果不存在）
+  const storageSpaceColumnCheck = await pool.query(`
+    SELECT column_name 
+    FROM information_schema.columns 
+    WHERE table_name = 'user_groups' AND column_name = 'storage_space'
+  `);
+
+  if (storageSpaceColumnCheck.rows.length === 0) {
+    console.log('🔄 正在为user_groups表添加storage_space列...');
+    await pool.query(`
+      ALTER TABLE user_groups 
+      ADD COLUMN storage_space INTEGER DEFAULT 100
+    `);
+    // 更新现有行的 storage_space 为默认值
+    await pool.query(`
+      UPDATE user_groups SET storage_space = 100 WHERE storage_space IS NULL
+    `);
+    console.log('✅ storage_space列添加成功');
+  }
+
+  // 创建用户组升级密钥表
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_group_keys (
+      id SERIAL PRIMARY KEY,
+      group_id INTEGER NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+      key VARCHAR(64) UNIQUE NOT NULL,
+      is_used BOOLEAN DEFAULT FALSE,
+      used_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      used_at TIMESTAMP WITH TIME ZONE,
+      expires_at TIMESTAMP WITH TIME ZONE,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT (CURRENT_TIMESTAMP + INTERVAL '8 hours')
+    )
+  `);
+
+  // 检查并添加 group_id 字段到 users 表
+  const groupIdColumnCheck = await pool.query(`
+    SELECT column_name 
+    FROM information_schema.columns 
+    WHERE table_name = 'users' AND column_name = 'group_id'
+  `);
+
+  if (groupIdColumnCheck.rows.length === 0) {
+    console.log('🔄 正在为users表添加group_id列...');
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN group_id INTEGER REFERENCES user_groups(id) ON DELETE SET NULL
+    `);
+    console.log('✅ group_id列添加成功');
+  }
+
+  // 检查并添加 group_expires_at 字段到 users 表
+  const groupExpiresColumnCheck = await pool.query(`
+    SELECT column_name 
+    FROM information_schema.columns 
+    WHERE table_name = 'users' AND column_name = 'group_expires_at'
+  `);
+
+  if (groupExpiresColumnCheck.rows.length === 0) {
+    console.log('🔄 正在为users表添加group_expires_at列...');
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN group_expires_at TIMESTAMP WITH TIME ZONE
+    `);
+    console.log('✅ group_expires_at列添加成功');
+  }
+
+  // 创建索引
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_groups_is_default ON user_groups(is_default)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_group_keys_key ON user_group_keys(key)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_group_keys_is_used ON user_group_keys(is_used)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_group_id ON users(group_id)`);
+
+  // 创建默认用户组（按名称检查，避免唯一约束错误）
+  const normalGroupExists = await pool.query(`
+    SELECT id FROM user_groups WHERE name = '普通用户' LIMIT 1
+  `);
+  if (normalGroupExists.rows.length === 0) {
+    await pool.query(`
+      INSERT INTO user_groups (name, description, daily_upload_limit, weekly_upload_limit, 
+        monthly_upload_limit, max_file_size, concurrent_uploads, storage_space, is_default)
+      VALUES ('普通用户', '默认用户组，基础上传权限', 50, 300, 1000, 10, 3, 100, true)
+    `);
+    console.log('✅ 默认用户组已创建');
+  } else {
+    // 如果没有默认组，将普通用户设为默认
+    const defaultGroup = await pool.query(`
+      SELECT id FROM user_groups WHERE is_default = true LIMIT 1
+    `);
+    if (defaultGroup.rows.length === 0) {
+      await pool.query(`
+        UPDATE user_groups SET is_default = true WHERE name = '普通用户'
+      `);
+      console.log('🔄 已将普通用户设为默认组');
+    }
+  }
+
+  // 创建VIP用户组
+  const vipGroupExists = await pool.query(`
+    SELECT id FROM user_groups WHERE name = 'VIP用户' LIMIT 1
+  `);
+  if (vipGroupExists.rows.length === 0) {
+    await pool.query(`
+      INSERT INTO user_groups (name, description, daily_upload_limit, weekly_upload_limit, 
+        monthly_upload_limit, max_file_size, concurrent_uploads, storage_space, is_default)
+      VALUES ('VIP用户', '高级用户组，更大上传配额', 200, 1500, 5000, 50, 10, 500, false)
+    `);
+    console.log('✅ VIP用户组已创建');
+  }
+
+  // 将没有用户组的用户设置为默认用户组
+  const defaultGroupResult = await pool.query(`
+    SELECT id FROM user_groups WHERE is_default = true LIMIT 1
+  `);
+  if (defaultGroupResult.rows.length > 0) {
+    const defaultGroupId = defaultGroupResult.rows[0].id;
+    const usersWithoutGroup = await pool.query(`
+      SELECT COUNT(*) as count FROM users WHERE group_id IS NULL
+    `);
+    if (parseInt(usersWithoutGroup.rows[0].count) > 0) {
+      await pool.query(`
+        UPDATE users SET group_id = $1 WHERE group_id IS NULL
+      `, [defaultGroupId]);
+      console.log(`🔄 已将 ${usersWithoutGroup.rows[0].count} 位用户设置为默认用户组`);
+    }
+  }
+
   // 创建默认管理员账户
   const adminExists = await pool.query(`
     SELECT id FROM users WHERE username = 'admin' LIMIT 1
@@ -399,10 +659,16 @@ async function initPostgresDatabase() {
     const defaultPassword = 'admin123';
     const hashedPassword = await bcrypt.hash(defaultPassword, 10);
     
+    // 获取默认用户组ID
+    const defaultGroup = await pool.query(`
+      SELECT id FROM user_groups WHERE is_default = true LIMIT 1
+    `);
+    const defaultGroupId = defaultGroup.rows.length > 0 ? defaultGroup.rows[0].id : null;
+    
     await pool.query(`
-      INSERT INTO users (username, email, password_hash, role)
-      VALUES ('admin', 'admin@example.com', $1, 'admin')
-    `, [hashedPassword]);
+      INSERT INTO users (username, email, password_hash, role, group_id)
+      VALUES ('admin', 'admin@example.com', $1, 'admin', $2)
+    `, [hashedPassword, defaultGroupId]);
     
     console.log('✅ 默认管理员账户已创建 (用户名: admin, 密码: admin123)');
   }
@@ -456,7 +722,9 @@ async function initDefaultConfigs() {
             allowedTypes: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
             autoCompress: false,
             compressQuality: 80,
-            allowRegistration: true
+            allowRegistration: true,
+            announcement: '',
+            announcementEnabled: false
           },
           description: '系统基础配置'
         },

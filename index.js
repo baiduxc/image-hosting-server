@@ -8,12 +8,134 @@ require('dotenv').config();
 
 // 导入数据库模块
 const { initDatabase, testConnection, imageDB, statsDB, userDB } = require('./database');
+const { dbAdapter, DB_TYPE } = require('./databaseAdapter');
 // 导入图片转存模块
 const { transferImages, validateImageUrl } = require('./imageTransfer');
 // 导入配置管理模块
 const { configManager } = require('./config');
 // 导入认证中间件
 const { authenticate, optionalAuth, requireAdmin } = require('./middleware/auth');
+
+// 获取用户组信息
+async function getUserGroupInfo(userId) {
+  try {
+    const userQuery = `SELECT group_id FROM users WHERE id = ${DB_TYPE === 'sqlite' ? '?' : '$1'}`;
+    const userResult = await dbAdapter.query(userQuery, [userId]);
+    const groupId = userResult.rows[0]?.group_id;
+
+    let group;
+    if (groupId) {
+      const groupQuery = `SELECT * FROM user_groups WHERE id = ${DB_TYPE === 'sqlite' ? '?' : '$1'}`;
+      const groupResult = await dbAdapter.query(groupQuery, [groupId]);
+      group = groupResult.rows[0];
+    }
+
+    if (!group) {
+      const defaultGroupQuery = `SELECT * FROM user_groups WHERE is_default = ${DB_TYPE === 'sqlite' ? '1' : 'true'} LIMIT 1`;
+      const defaultGroupResult = await dbAdapter.query(defaultGroupQuery);
+      group = defaultGroupResult.rows[0];
+    }
+
+    return group;
+  } catch (error) {
+    console.error('获取用户组信息失败:', error);
+    return null;
+  }
+}
+
+// 检查用户上传限制
+async function checkUserUploadLimit(userId, fileCount) {
+  const group = await getUserGroupInfo(userId);
+  if (!group) {
+    return { allowed: true };
+  }
+
+  const limits = {
+    daily: parseInt(group.daily_upload_limit) || 0,
+    weekly: parseInt(group.weekly_upload_limit) || 0,
+    monthly: parseInt(group.monthly_upload_limit) || 0,
+    concurrent: parseInt(group.concurrent_uploads) || 3
+  };
+
+  // 检查批量上传数量
+  if (fileCount > limits.concurrent) {
+    return {
+      allowed: false,
+      message: `批量上传数量超过限制（最大 ${limits.concurrent} 个）`
+    };
+  }
+
+  // 获取今日上传数量
+  let todayCount = 0;
+  if (DB_TYPE === 'sqlite') {
+    const result = await dbAdapter.query(
+      `SELECT COUNT(*) as count FROM images WHERE user_id = ? AND date(created_at) = date('now', '+8 hours')`,
+      [userId]
+    );
+    todayCount = parseInt(result.rows[0].count);
+  } else {
+    const result = await dbAdapter.query(
+      `SELECT COUNT(*) as count FROM images WHERE user_id = $1 AND DATE(created_at) = CURRENT_DATE`,
+      [userId]
+    );
+    todayCount = parseInt(result.rows[0].count);
+  }
+
+  if (limits.daily > 0 && todayCount + fileCount > limits.daily) {
+    return {
+      allowed: false,
+      message: `今日上传数量已达上限（${limits.daily} 张）`
+    };
+  }
+
+  // 检查周限制
+  let weekCount = 0;
+  if (DB_TYPE === 'sqlite') {
+    const result = await dbAdapter.query(
+      `SELECT COUNT(*) as count FROM images WHERE user_id = ? AND date(created_at) >= date('now', '-7 days', '+8 hours')`,
+      [userId]
+    );
+    weekCount = parseInt(result.rows[0].count);
+  } else {
+    const result = await dbAdapter.query(
+      `SELECT COUNT(*) as count FROM images WHERE user_id = $1 AND created_at >= DATE_TRUNC('week', CURRENT_DATE)`,
+      [userId]
+    );
+    weekCount = parseInt(result.rows[0].count);
+  }
+
+  if (limits.weekly > 0 && weekCount + fileCount > limits.weekly) {
+    return {
+      allowed: false,
+      message: `本周上传数量已达上限（${limits.weekly} 张）`
+    };
+  }
+
+  // 检查月限制
+  let monthCount = 0;
+  if (DB_TYPE === 'sqlite') {
+    const result = await dbAdapter.query(
+      `SELECT COUNT(*) as count FROM images WHERE user_id = ? AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now', '+8 hours')`,
+      [userId]
+    );
+    monthCount = parseInt(result.rows[0].count);
+  } else {
+    const result = await dbAdapter.query(
+      `SELECT COUNT(*) as count FROM images WHERE user_id = $1 AND created_at >= DATE_TRUNC('month', CURRENT_DATE)`,
+      [userId]
+    );
+    monthCount = parseInt(result.rows[0].count);
+  }
+
+  if (limits.monthly > 0 && monthCount + fileCount > limits.monthly) {
+    return {
+      allowed: false,
+      message: `本月上传数量已达上限（${limits.monthly} 张）`
+    };
+  }
+
+  return { allowed: true, limits };
+}
 // 导入路由
 const authRoutes = require('./routes/auth');
 const imageRoutes = require('./routes/images');
@@ -22,6 +144,7 @@ const configRoutes = require('./routes/config');
 const storageRoutes = require('./routes/storage');
 const databaseRoutes = require('./routes/database');
 const apiRoutes = require('./routes/api');
+const userGroupRoutes = require('./routes/userGroups');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -61,6 +184,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/config', configRoutes);
 app.use('/api/storage', storageRoutes);
 app.use('/api/database', databaseRoutes);
+app.use('/api/user-groups', userGroupRoutes);  // 用户组管理
 app.use('/api/v1', apiRoutes);  // 公开 API v1
 app.use('/api/keys', apiRoutes);  // API 密钥管理（兼容路径）
 
@@ -105,6 +229,15 @@ app.post('/api/upload-to-storage', authenticate, async (req, res) => {
       return res.status(400).json({
         success: false,
         message: '请选择存储方式'
+      });
+    }
+
+    // 检查用户上传限制
+    const limitCheck = await checkUserUploadLimit(req.user.id, files.length);
+    if (!limitCheck.allowed) {
+      return res.status(403).json({
+        success: false,
+        message: limitCheck.message
       });
     }
 
@@ -346,6 +479,15 @@ app.post('/api/transfer', authenticate, async (req, res) => {
       return res.status(400).json({
         success: false,
         message: '请提供有效的图片URL列表'
+      });
+    }
+
+    // 检查用户上传限制
+    const limitCheck = await checkUserUploadLimit(req.user.id, urls.length);
+    if (!limitCheck.allowed) {
+      return res.status(403).json({
+        success: false,
+        message: limitCheck.message
       });
     }
 
