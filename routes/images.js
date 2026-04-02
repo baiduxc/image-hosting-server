@@ -198,7 +198,7 @@ router.delete('/:id', authenticate, async (req, res) => {
 
     // 删除对象存储中的文件
     let storageDeleteResult = null;
-    if (image.storage_id && image.upload_type === 'storage') {
+    if (image.storage_id && ['storage', 'transfer'].includes(image.upload_type)) {
       try {
         // 获取存储配置
         const storageConfig = await storageDB.getStorage(image.storage_id);
@@ -306,7 +306,7 @@ router.delete('/', authenticate, async (req, res) => {
         }
 
         // 删除对象存储中的文件
-        if (image.storage_id && image.upload_type === 'storage') {
+        if (image.storage_id && ['storage', 'transfer'].includes(image.upload_type)) {
           try {
             // 获取存储配置
             const storageConfig = await storageDB.getStorage(image.storage_id);
@@ -492,7 +492,7 @@ router.delete('/:id/permanent', authenticate, async (req, res) => {
 
     // 删除对象存储中的文件（如果存在）
     let storageDeleteResult = null;
-    if (image.storage_id && image.upload_type === 'storage') {
+    if (image.storage_id && ['storage', 'transfer'].includes(image.upload_type)) {
       try {
         const { storageDB } = require('../database');
         const StorageService = require('../services/storageService');
@@ -582,7 +582,7 @@ router.delete('/permanent', authenticate, async (req, res) => {
         }
 
         // 删除对象存储中的文件
-        if (image.storage_id && image.upload_type === 'storage') {
+        if (image.storage_id && ['storage', 'transfer'].includes(image.upload_type)) {
           try {
             const { storageDB } = require('../database');
             const storageConfig = await storageDB.getStorage(image.storage_id);
@@ -676,7 +676,7 @@ router.post('/cleanup', authenticate, async (req, res) => {
     for (const image of toCleanup.rows) {
       try {
         // 删除对象存储中的文件
-        if (image.storage_id && image.upload_type === 'storage') {
+        if (image.storage_id && ['storage', 'transfer'].includes(image.upload_type)) {
           const { storageDB } = require('../database');
           const storageConfig = await storageDB.getStorage(image.storage_id);
           if (storageConfig) {

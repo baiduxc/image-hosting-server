@@ -90,8 +90,8 @@ class StorageService {
    * 将base64转换为Buffer
    */
   base64ToBuffer(base64Data) {
-    // 移除data:image/xxx;base64,前缀
-    const base64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
+    // 移除 data:*/*;base64, 前缀，兼容图片与视频
+    const base64 = base64Data.replace(/^data:[^;]+;base64,/, '');
     return Buffer.from(base64, 'base64');
   }
 

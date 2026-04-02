@@ -9,8 +9,8 @@ require('dotenv').config();
 // 导入数据库模块
 const { initDatabase, testConnection, imageDB, statsDB, userDB } = require('./database');
 const { dbAdapter, DB_TYPE } = require('./databaseAdapter');
-// 导入图片转存模块
-const { transferImages, validateImageUrl } = require('./imageTransfer');
+// 导入媒体转存模块（图片 + 视频）
+const { transferMedia, validateMediaUrl } = require('./mediaTransfer');
 // 导入配置管理模块
 const { configManager } = require('./config');
 // 导入认证中间件
@@ -136,6 +136,38 @@ async function checkUserUploadLimit(userId, fileCount) {
 
   return { allowed: true, limits };
 }
+
+const MAX_UPLOAD_FILE_SIZE = 200 * 1024 * 1024;
+
+function isSupportedUploadType(mimeType = '') {
+  const lowerMime = mimeType.toLowerCase();
+  return lowerMime.startsWith('image/') || lowerMime.startsWith('video/');
+}
+
+function validateUploadFileData(fileData) {
+  if (!fileData || typeof fileData !== 'object') {
+    return { valid: false, message: '文件数据格式无效' };
+  }
+
+  if (!fileData.name || !fileData.data || !fileData.type) {
+    return { valid: false, message: '文件字段不完整' };
+  }
+
+  if (!isSupportedUploadType(fileData.type)) {
+    return { valid: false, message: `不支持的文件类型: ${fileData.type}` };
+  }
+
+  if (!fileData.size || Number(fileData.size) <= 0) {
+    return { valid: false, message: '文件大小无效' };
+  }
+
+  if (Number(fileData.size) > MAX_UPLOAD_FILE_SIZE) {
+    return { valid: false, message: `文件大小超过限制 (${Math.floor(MAX_UPLOAD_FILE_SIZE / 1024 / 1024)}MB)` };
+  }
+
+  return { valid: true };
+}
+
 // 导入路由
 const authRoutes = require('./routes/auth');
 const imageRoutes = require('./routes/images');
@@ -162,8 +194,8 @@ app.use(cors({
   exposedHeaders: '*' // 暴露所有头部
 }));
 app.use(morgan('combined'));
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '220mb' }));
+app.use(express.urlencoded({ extended: true, limit: '220mb' }));
 
 // 静态文件服务 - 提供上传的图片（全开放访问）
 app.use('/uploads', (req, res, next) => {
@@ -262,7 +294,18 @@ app.post('/api/upload-to-storage', authenticate, async (req, res) => {
     // 异步处理单个文件的函数
     const processFile = async (fileData, index) => {
       try {
-        
+        const validation = validateUploadFileData(fileData);
+        if (!validation.valid) {
+          return {
+            originalName: fileData?.name || '未知文件',
+            size: Number(fileData?.size) || 0,
+            mimeType: fileData?.type || '',
+            error: validation.message,
+            success: false,
+            index
+          };
+        }
+
         // 上传到对象存储
         const uploadResult = await storageService.uploadFile(
           {
@@ -434,7 +477,7 @@ app.post('/api/validate-urls', async (req, res) => {
     for (const chunk of chunks) {
       const chunkPromises = chunk.map(async (url) => {
         try {
-          const validation = await validateImageUrl(url.trim());
+          const validation = await validateMediaUrl(url.trim());
           return {
             url: url.trim(),
             ...validation
@@ -470,7 +513,7 @@ app.post('/api/validate-urls', async (req, res) => {
   }
 });
 
-// 网络图片转存接口（需要认证）
+// 网络媒体转存接口（图片 + 视频，需认证）
 app.post('/api/transfer', authenticate, async (req, res) => {
   try {
     const { urls } = req.body;
@@ -478,7 +521,7 @@ app.post('/api/transfer', authenticate, async (req, res) => {
     if (!urls || !Array.isArray(urls) || urls.length === 0) {
       return res.status(400).json({
         success: false,
-        message: '请提供有效的图片URL列表'
+        message: '请提供有效的媒体URL列表'
       });
     }
 
@@ -524,7 +567,7 @@ app.post('/api/transfer', authenticate, async (req, res) => {
     if (validUrls.length === 0) {
       return res.status(400).json({
         success: false,
-        message: '没有有效的图片URL'
+        message: '没有有效的媒体URL'
       });
     }
 
@@ -532,7 +575,7 @@ app.post('/api/transfer', authenticate, async (req, res) => {
     if (validUrls.length > 20) {
       return res.status(400).json({
         success: false,
-        message: '单次最多支持转存20张图片'
+        message: '单次最多支持转存20个媒体链接'
       });
     }
 
@@ -546,7 +589,7 @@ app.post('/api/transfer', authenticate, async (req, res) => {
 
     // 调用转存功能
     const baseUrl = `${req.protocol}://${req.get('host')}`;
-    const results = await transferImages(validUrls, uploadDir, baseUrl, req.user.id);
+    const results = await transferMedia(validUrls, uploadDir, baseUrl, req.user.id);
 
     // 统计结果
     const successCount = results.filter(r => r.success).length;
@@ -554,7 +597,7 @@ app.post('/api/transfer', authenticate, async (req, res) => {
 
     res.json({
       success: true,
-      message: `批量转存完成：成功 ${successCount} 张，失败 ${failCount} 张`,
+      message: `批量转存完成：成功 ${successCount} 个，失败 ${failCount} 个`,
       data: results,
       summary: {
         total: results.length,
@@ -566,7 +609,7 @@ app.post('/api/transfer', authenticate, async (req, res) => {
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: '图片转存失败',
+      message: '媒体转存失败',
       error: error.message
     });
   }
